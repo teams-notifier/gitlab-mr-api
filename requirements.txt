@@ -1,0 +1,15 @@
+python-dotenv
+pydantic
+asyncpg
+httpx
+blibs
+fastapi[standard]
+jinja2
+asgi-logger
+opentelemetry-distro
+opentelemetry-exporter-otlp
+#opentelemetry-instrumentation-fastapi
+#opentelemetry-instrumentation-asyncpg
+#opentelemetry-instrumentation-httpx
+#opentelemetry-instrumentation-asyncio
+#opentelemetry-instrumentation-aiohttp-client
