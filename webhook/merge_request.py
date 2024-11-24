@@ -183,7 +183,9 @@ async def merge_request(
                     in (
                         "closed",
                         "merged",
-                    ),
+                    )
+                    or mr.object_attributes.draft
+                    or mr.object_attributes.work_in_progress,
                 )
 
     if mr.object_attributes.action in ("merge", "close") or mr.object_attributes.state in (
