@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import asyncio
 import logging
+import os
 import uuid
 from contextlib import asynccontextmanager
 from typing import Annotated
@@ -46,6 +47,7 @@ async def lifespan(app: FastAPI):
 
 app: FastAPI = FastAPI(
     title="Teams Notifier gitlab-mr-api",
+    version=os.environ.get("VERSION", "v0.0.0-dev"),
     lifespan=lifespan,
     middleware=[
         Middleware(
