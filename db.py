@@ -48,6 +48,10 @@ class DatabaseLifecycleHandler:
             init=self.init_connection,
         )
 
+        # Simple check at startup, will validate database resolution and creds
+        async with await self.acquire() as connection:
+            await connection.fetchval("SELECT 1")
+
     async def init_connection(self, conn: asyncpg.Connection) -> None:
         log.debug("connecting to database")
         await conn.set_type_codec("jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog")
