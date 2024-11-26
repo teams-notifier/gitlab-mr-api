@@ -44,6 +44,7 @@ def render(mri: MergeRequestInfos) -> dict[str, Any]:
         "latest_action": mri.merge_request_payload.object_attributes.action,
         "source_branch": mri.merge_request_payload.object_attributes.source_branch,
         "target_branch": mri.merge_request_payload.object_attributes.target_branch,
+        "project_url": mri.merge_request_payload.project.web_url,
         "url": mri.merge_request_payload.object_attributes.url,
         "latest_pipeline": latest_pipeline_infos,
         "approvers": approvers,
