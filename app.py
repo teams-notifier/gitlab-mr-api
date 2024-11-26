@@ -6,6 +6,7 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Annotated
 
+import asyncpg
 import blibs
 import httpx
 from asgi_logger.middleware import AccessLoggerMiddleware
@@ -108,6 +109,18 @@ async def handle_webhook(
             status_code=exc.response.status_code,
             detail=exc.response.json(),
         )
+
+
+@app.get("/healthz", include_in_schema=False)
+async def healthcheck():
+    try:
+        connection: asyncpg.pool.PoolConnectionProxy
+        async with await database.acquire() as connection:
+            result = await connection.fetchval("SELECT true FROM merge_request_ref")
+            return {"ok": result}
+    except Exception as e:
+        logger.exception(f"health check failed with {type(e)}: {e}")
+        raise HTTPException(status_code=500, detail=f"{type(e)}: {e}")
 
 
 if __name__ == "__main__":

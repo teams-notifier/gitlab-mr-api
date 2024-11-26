@@ -33,4 +33,4 @@ RUN set -e \
 
 COPY --chown=app:app . /app/
 
-CMD ["fastapi", "run"]
+CMD ["/app/run.sh"]
