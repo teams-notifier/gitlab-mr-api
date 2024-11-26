@@ -3,6 +3,7 @@ import datetime
 import json
 from typing import Any
 
+import yaml
 from jinja2 import Environment
 from jinja2 import FileSystemLoader
 from jinja2 import Template
@@ -12,7 +13,7 @@ from db import MergeRequestInfos
 
 def render(mri: MergeRequestInfos) -> dict[str, Any]:
     env = Environment(loader=FileSystemLoader("./cards/"))
-    templ: Template = env.get_template("merge_request.json.j2")
+    templ: Template = env.get_template("merge_request.yaml.j2")
 
     fallback = (
         f"MR {mri.merge_request_payload.object_attributes.state}:"
@@ -57,7 +58,7 @@ def render(mri: MergeRequestInfos) -> dict[str, Any]:
         now=datetime.datetime.now(),
     )
     # print(rendered)
-    # open("/tmp/notiteams-gitlab-mr-api-OUTPUT.json", "w").write(rendered)
-    result_as_json: dict[str, Any] = json.loads(rendered)
+    # open("/tmp/notiteams-gitlab-mr-api-OUTPUT.yaml", "w").write(rendered)
+    result_as_json: dict[str, Any] = yaml.safe_load(rendered)
 
     return result_as_json

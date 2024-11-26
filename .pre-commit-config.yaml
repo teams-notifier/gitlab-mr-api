@@ -53,6 +53,7 @@ repos:
         #    files: ^*.py
         additional_dependencies:
           - pydantic
+          - types-PyYAML
         args:
           - --check-untyped-defs
           - --disallow-any-generics
