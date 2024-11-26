@@ -1,0 +1,169 @@
+$schema: https://adaptivecards.io/schemas/adaptive-card.json
+type: AdaptiveCard
+version: '1.5'
+fallbackText: {{ fallback }}
+speak: {{ fallback }}
+body:
+- size: Small
+  text: '{{ precalc.path_with_namespace }} [!{{ precalc.iid }}]'
+  type: TextBlock
+  weight: Bolder
+  wrap: true
+- columns:
+  - items:
+    - color: Accent
+      name: BranchRequest
+      type: Icon
+    type: Column
+    verticalContentAlignment: Center
+    width: auto
+  - items:
+    - size: Large
+      text: '{{ precalc.title | e }}'
+      type: TextBlock
+      weight: Bolder
+      wrap: true
+    - size: Small
+      text: Opened by {{ precalc.openner.name }}
+      type: TextBlock
+      wrap: true
+    spacing: Small
+    type: Column
+    verticalContentAlignment: Center
+    width: stretch
+  spacing: Small
+  type: ColumnSet
+- columns:
+  - width: 1
+  - width: 2
+  firstRowAsHeaders: false
+  rows:
+  - cells:
+    - items:
+      - text: Last MR status
+        type: TextBlock
+        weight: Bolder
+        wrap: true
+      type: TableCell
+      verticalContentAlignment: Center
+    - items:
+      - text: '{{ precalc.detailed_merge_status }}'
+        type: TextBlock
+        wrap: true
+      type: TableCell
+      verticalContentAlignment: Center
+    type: TableRow
+  - cells:
+    - items:
+      - text: Last MR action
+        type: TextBlock
+        weight: Bolder
+        wrap: true
+      type: TableCell
+    - items:
+      - text: '{{ precalc.latest_action }}'
+        type: TextBlock
+        wrap: true
+      type: TableCell
+    type: TableRow
+  - cells:
+    - items:
+      - text: Source branch
+        type: TextBlock
+        weight: Bolder
+        wrap: true
+      type: TableCell
+    - items:
+      - text: '{{ precalc.source_branch }}'
+        type: TextBlock
+        wrap: true
+      type: TableCell
+    type: TableRow
+  - cells:
+    - items:
+      - text: Target branch
+        type: TextBlock
+        weight: Bolder
+        wrap: true
+      type: TableCell
+    - items:
+      - text: '{{ precalc.target_branch }}'
+        type: TextBlock
+        wrap: true
+      type: TableCell
+    type: TableRow
+  - cells:
+    - items:
+      - text: Approvals
+        type: TextBlock
+        weight: Bolder
+        wrap: true
+      type: TableCell
+    - items:
+      - text: '{{ precalc.approvers | join(",") }}'
+        type: TextBlock
+        wrap: true
+      type: TableCell
+    type: TableRow
+{% if mri.head_pipeline_id %}
+  - cells:
+    - items:
+      - text: Head pipeline
+        type: TextBlock
+        weight: Bolder
+        wrap: true
+      type: TableCell
+      verticalContentAlignment: Center
+    - items:
+      - text: '[{{ mri.head_pipeline_id }}]({{ precalc.project_url }}/-/pipelines/{{ mri.head_pipeline_id }})'
+        type: TextBlock
+        wrap: true
+      type: TableCell
+      verticalContentAlignment: Center
+    type: TableRow
+{% if precalc.latest_pipeline %}
+  - cells:
+    - items:
+      - text: Pipeline status
+        type: TextBlock
+        weight: Bolder
+        wrap: true
+      type: TableCell
+      verticalContentAlignment: Center
+    - items:
+      - color: {{ precalc.latest_pipeline.color }}
+        text: {{ precalc.latest_pipeline.status }}
+        type: TextBlock
+        weight: {{ precalc.latest_pipeline.weight }}
+        wrap: true
+      type: TableCell
+      verticalContentAlignment: Center
+    type: TableRow
+{% endif %}
+{% endif %}
+  - cells:
+    - items:
+      - text: Last update
+        type: TextBlock
+        weight: Bolder
+        wrap: true
+      type: TableCell
+      verticalContentAlignment: Center
+    - items:
+      - text: '{{now}}'
+        type: TextBlock
+        wrap: true
+      type: TableCell
+      verticalContentAlignment: Center
+    type: TableRow
+  showGridLines: false
+  type: Table
+- actions:
+  - title: Overview
+    type: Action.OpenUrl
+    url: '{{ mri.merge_request_payload.object_attributes.url }}'
+  - title: Diff
+    type: Action.OpenUrl
+    url: '{{ mri.merge_request_payload.object_attributes.url }}/diffs'
+  spacing: ExtraLarge
+  type: ActionSet

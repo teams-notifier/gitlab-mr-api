@@ -5,6 +5,7 @@ httpx
 blibs
 fastapi[standard]
 jinja2
+pyyaml
 asgi-logger
 opentelemetry-distro
 opentelemetry-exporter-otlp
