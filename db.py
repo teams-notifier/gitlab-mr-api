@@ -94,7 +94,7 @@ class GitlabApprovals(GitlabUser):
 
 class MergeRequestExtraState(BaseModel):
     version: int
-    openner: GitlabUser
+    opener: GitlabUser
     approvers: dict[str, GitlabApprovals]
     pipeline_statuses: dict[str, PipelinePayload]
     emojis: dict[str, Any]
@@ -145,7 +145,7 @@ class DBHelper:
             insert_only_vals={
                 "merge_request_extra_state": {
                     "version": 1,
-                    "openner": {
+                    "opener": {
                         "id": merge_request.user.id,
                         "name": merge_request.user.name,
                         "username": merge_request.user.username,

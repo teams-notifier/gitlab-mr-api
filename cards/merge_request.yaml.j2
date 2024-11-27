@@ -11,7 +11,7 @@ body:
   wrap: true
 - columns:
   - items:
-    - color: Accent
+    - color: {{ precalc.icon_color | default("Accent") }}
       name: BranchRequest
       type: Icon
     type: Column
@@ -24,7 +24,7 @@ body:
       weight: Bolder
       wrap: true
     - size: Small
-      text: Opened by {{ precalc.openner.name }}
+      text: Opened by {{ precalc.opener.name }}
       type: TextBlock
       wrap: true
     spacing: Small

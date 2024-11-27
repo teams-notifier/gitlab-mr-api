@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import datetime
 import json
+from enum import Enum
 from typing import Any
 
 import yaml
@@ -9,6 +10,16 @@ from jinja2 import FileSystemLoader
 from jinja2 import Template
 
 from db import MergeRequestInfos
+
+
+class Teams_Color(Enum):
+    DEFAULT = "default"
+    DARK = "dark"
+    LIGHT = "light"
+    ACCENT = "accent"
+    GOOD = "good"
+    WARNING = "warning"
+    ATTENTION = "attention"
 
 
 def render(mri: MergeRequestInfos) -> dict[str, Any]:
@@ -36,11 +47,18 @@ def render(mri: MergeRequestInfos) -> dict[str, Any]:
         if approver.status == "approved"
     ]
 
+    icon_color: Teams_Color = Teams_Color.ACCENT
+
+    if mri.merge_request_payload.object_attributes.action == "close":
+        icon_color = Teams_Color.ATTENTION
+    if mri.merge_request_payload.object_attributes.action == "merge":
+        icon_color = Teams_Color.GOOD
+
     precalc = {
         "path_with_namespace": mri.merge_request_payload.project.path_with_namespace,
         "iid": mri.merge_request_payload.object_attributes.iid,
         "title": mri.merge_request_payload.object_attributes.title,
-        "openner": mri.merge_request_extra_state.openner,
+        "opener": mri.merge_request_extra_state.opener,
         "detailed_merge_status": mri.merge_request_payload.object_attributes.detailed_merge_status,
         "latest_action": mri.merge_request_payload.object_attributes.action,
         "source_branch": mri.merge_request_payload.object_attributes.source_branch,
@@ -49,6 +67,7 @@ def render(mri: MergeRequestInfos) -> dict[str, Any]:
         "url": mri.merge_request_payload.object_attributes.url,
         "latest_pipeline": latest_pipeline_infos,
         "approvers": approvers,
+        "icon_color": icon_color.value,
     }
 
     rendered = templ.render(

@@ -100,13 +100,24 @@ async def create_or_update_message(
 
         connection: asyncpg.Connection
         async with await database.acquire() as connection:
-            await connection.execute(
+            result = await connection.fetchrow(
                 """UPDATE merge_request_message_ref
                     SET message_id = $1
                     WHERE merge_request_message_ref_id = $2
+                        AND message_id IS NULL
+                    RETURNING merge_request_message_ref_id
                 """,
                 response.get("message_id"),
                 mrmsgref.merge_request_message_ref_id,
+            )
+        if result is None or len(result) == 0:
+            # This case is a race condition so cleanup the second message :)
+            await client.request(
+                "DELETE",
+                config.ACTIVITY_API + "api/v1/message",
+                json={
+                    "message_id": str(response.get("message_id")),
+                },
             )
     else:
         payload["message_id"] = str(mrmsgref.message_id)
