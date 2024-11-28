@@ -9,11 +9,37 @@ SET xmloption = content;
 SET client_min_messages = warning;
 SET row_security = off;
 
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp" WITH SCHEMA public;
+
 --
 -- Name: gitlab_mr_api; Type: SCHEMA; Schema: -; Owner: -
 --
 
 CREATE SCHEMA gitlab_mr_api;
+
+--
+-- Name: uuid_generate_v7(); Type: FUNCTION; Schema: gitlab_mr_api; Owner: -
+--
+
+CREATE FUNCTION gitlab_mr_api.uuid_generate_v7() RETURNS uuid
+    LANGUAGE plpgsql PARALLEL SAFE
+    AS $$
+  DECLARE
+    -- The current UNIX timestamp in milliseconds
+    unix_time_ms CONSTANT bytea NOT NULL DEFAULT substring(int8send((extract(epoch FROM clock_timestamp()) * 1000)::bigint) from 3);
+
+    -- The buffer used to create the UUID, starting with the UNIX timestamp and followed by random bytes
+    buffer                bytea NOT NULL DEFAULT unix_time_ms || public.gen_random_bytes(10);
+  BEGIN
+    -- Set most significant 4 bits of 7th byte to 7 (for UUID v7), keeping the last 4 bits unchanged
+    buffer = set_byte(buffer, 6, (b'0111' || get_byte(buffer, 6)::bit(4))::bit(8)::int);
+
+    -- Set most significant 2 bits of 9th byte to 2 (the UUID variant specified in RFC 4122), keeping the last 6 bits unchanged
+    buffer = set_byte(buffer, 8, (b'10'   || get_byte(buffer, 8)::bit(6))::bit(8)::int);
+
+    RETURN encode(buffer, 'hex');
+  END
+$$;
 
 
 SET default_tablespace = '';
@@ -85,7 +111,8 @@ CREATE TABLE gitlab_mr_api.merge_request_ref (
     gitlab_merge_request_iid bigint NOT NULL,
     merge_request_payload jsonb DEFAULT '{}'::jsonb,
     merge_request_extra_state jsonb DEFAULT '{}'::jsonb,
-    head_pipeline_id bigint
+    head_pipeline_id bigint,
+    merge_request_ref_uuid uuid DEFAULT gitlab_mr_api.uuid_generate_v7() NOT NULL
 );
 
 
