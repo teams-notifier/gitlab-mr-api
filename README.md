@@ -14,8 +14,15 @@ Environment variables or `.env`:
 
 * `PORT`: port to listen to (def: `3980`)
 * `ACTIVITY_API`: `activity-api` base URL (ex: `https://activity-api:3981/`)
-* `DATABASE_URL`: Database DSN in the form: `postgresql://{USER}:{PASSWORD}@{HOST}/{DATABASE}`
+* `DATABASE_URL`: Database DSN in the form: `postgresql://{USER}:{PASSWORD}@{HOST}/{DATABASE}?search_path=gitlab_mr_api`
 * `VALID_X_GITLAB_TOKEN`: comma separated list of Gitlab's Secret token (sent as `X-Gitlab-Token` header). A UUIDv4 generated token is recommended.
+
+### Notes on `db/schema.sql`
+
+The dump uses a dedicated schema but expects `pgcrypto` in the *public* schema for `uuid_generate_v7`.
+If you plan to deploy the dump in another schema or if the extension has been deployed somewhere else, adapt the function definition and the dump accordingly.
+
+To connect directly to the dedicated schema, you can use *search_path* argument of the DSN `?search_path=gitlab_mr_api`.
 
 # Web hook config
 
