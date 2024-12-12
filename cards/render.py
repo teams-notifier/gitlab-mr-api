@@ -28,8 +28,8 @@ def render(mri: MergeRequestInfos) -> dict[str, Any]:
 
     fallback = (
         f"MR {mri.merge_request_payload.object_attributes.state}:"
-        f" {mri.merge_request_payload.object_attributes.title}\n"
-        f"on {mri.merge_request_payload.project.path_with_namespace}"
+        f" {mri.merge_request_payload.object_attributes.title}"
+        f" on {mri.merge_request_payload.project.path_with_namespace}"
     )
 
     latest_pipeline_obj = mri.merge_request_extra_state.pipeline_statuses.get(str(mri.head_pipeline_id))
@@ -46,6 +46,10 @@ def render(mri: MergeRequestInfos) -> dict[str, Any]:
         for approver in mri.merge_request_extra_state.approvers.values()
         if approver.status == "approved"
     ]
+
+    assignees = [assignees.name for assignees in mri.merge_request_payload.assignees]
+
+    reviewers = [reviewers.name for reviewers in mri.merge_request_payload.reviewers]
 
     icon_color: Teams_Color = Teams_Color.ACCENT
 
@@ -67,6 +71,8 @@ def render(mri: MergeRequestInfos) -> dict[str, Any]:
         "url": mri.merge_request_payload.object_attributes.url,
         "latest_pipeline": latest_pipeline_infos,
         "approvers": approvers,
+        "assignees": assignees,
+        "reviewers": reviewers,
         "icon_color": icon_color.value,
     }
 
