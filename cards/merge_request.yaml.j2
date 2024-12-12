@@ -9,187 +9,220 @@ body:
   type: TextBlock
   weight: Bolder
   wrap: true
-- columns:
-  - items:
-    - color: {{ precalc.icon_color | default("Accent") }}
-      name: BranchRequest
-      type: Icon
-    type: Column
+- type: ColumnSet
+  spacing: Small
+  columns:
+  - type: Column
     verticalContentAlignment: Center
     width: auto
-  - items:
-    - size: Large
-      text: '{{ precalc.title | e }}'
-      type: TextBlock
-      weight: Bolder
-      wrap: true
-    - size: Small
-      text: Opened by {{ precalc.opener.name }}
-      type: TextBlock
-      wrap: true
+    items:
+    - type: Icon
+      color: {{ precalc.icon_color | default("Accent") }}
+      name: BranchRequest
+  - type: Column
     spacing: Small
-    type: Column
     verticalContentAlignment: Center
     width: stretch
-  spacing: Small
-  type: ColumnSet
-- columns:
-  - width: 1
-  - width: 1
+    items:
+    - type: TextBlock
+      size: Large
+      text: '{{ precalc.title | e }}'
+      weight: Bolder
+      wrap: true
+    - type: TextBlock
+      size: Small
+      text: Opened by {{ precalc.opener.name }}
+      wrap: true
+- type: Table
+  showGridLines: false
+  columns:
+  - width: 3
+  - width: 7
   firstRowAsHeaders: false
   rows:
-  - cells:
-    - items:
-      - text: Last reported status
-        type: TextBlock
-        weight: Bolder
-        wrap: true
-      type: TableCell
+  - type: TableRow
+    cells:
+    - type: TableCell
       verticalContentAlignment: Center
-    - items:
-      - text: '{{ precalc.detailed_merge_status }}'
-        type: TextBlock
+      items:
+      - type: TextBlock
+        text: Last reported status
+        size: Small
+        weight: Bolder
         wrap: true
-      type: TableCell
+    - type: TableCell
       verticalContentAlignment: Center
-    type: TableRow
-  - cells:
-    - items:
-      - text: Last reported action
-        type: TextBlock
+      items:
+      - type: TextBlock
+        text: '{{ precalc.detailed_merge_status }}'
+        #size: Small
+        wrap: true
+  - type: TableRow
+    cells:
+    - type: TableCell
+      verticalContentAlignment: Center
+      items:
+      - type: TextBlock
+        text: Last reported action
+        size: Small
         weight: Bolder
         wrap: true
-      type: TableCell
-    - items:
-      - text: '{{ precalc.latest_action }}'
-        type: TextBlock
+    - type: TableCell
+      verticalContentAlignment: Center
+      items:
+      - type: TextBlock
+        text: '{{ precalc.latest_action }}'
+        #size: Small
         wrap: true
-      type: TableCell
-    type: TableRow
-  - cells:
-    - items:
-      - text: Source branch
-        type: TextBlock
+  - type: TableRow
+    cells:
+    - type: TableCell
+      verticalContentAlignment: Center
+      items:
+      - type: TextBlock
+        text: Source branch
+        size: Small
         weight: Bolder
         wrap: true
-      type: TableCell
-    - items:
-      - text: '{{ precalc.source_branch }}'
-        type: TextBlock
+    - type: TableCell
+      verticalContentAlignment: Center
+      items:
+      - type: TextBlock
+        text: '{{ precalc.source_branch }}'
+        #size: Small
         wrap: true
-      type: TableCell
-    type: TableRow
-  - cells:
-    - items:
-      - text: Target branch
-        type: TextBlock
+  - type: TableRow
+    cells:
+    - type: TableCell
+      verticalContentAlignment: Center
+      items:
+      - type: TextBlock
+        text: Target branch
+        size: Small
         weight: Bolder
         wrap: true
-      type: TableCell
-    - items:
-      - text: '{{ precalc.target_branch }}'
-        type: TextBlock
+    - type: TableCell
+      verticalContentAlignment: Center
+      items:
+      - type: TextBlock
+        text: '{{ precalc.target_branch }}'
+        #size: Small
         wrap: true
-      type: TableCell
-    type: TableRow
+
 {% if precalc.assignees %}
-  - cells:
-    - items:
-      - text: Assignees
-        type: TextBlock
+  - type: TableRow
+    cells:
+    - type: TableCell
+      verticalContentAlignment: Center
+      items:
+      - type: TextBlock
+        text: Assignees
+        size: Small
         weight: Bolder
         wrap: true
-      type: TableCell
-    - items:
-      - text: '{{ precalc.assignees | join(",") }}'
-        type: TextBlock
+    - type: TableCell
+      verticalContentAlignment: Center
+      items:
+      - type: TextBlock
+        text: '{{ precalc.assignees | join(",") }}'
+        #size: Small
         wrap: true
-      type: TableCell
-    type: TableRow
 {% endif %}
 {% if precalc.reviewers %}
-  - cells:
-    - items:
-      - text: Reviewers
-        type: TextBlock
+  - type: TableRow
+    cells:
+    - type: TableCell
+      verticalContentAlignment: Center
+      items:
+      - type: TextBlock
+        text: Reviewers
+        size: Small
         weight: Bolder
         wrap: true
-      type: TableCell
-    - items:
-      - text: '{{ precalc.reviewers | join(",") }}'
-        type: TextBlock
+    - type: TableCell
+      verticalContentAlignment: Center
+      items:
+      - type: TextBlock
+        text: '{{ precalc.reviewers | join(",") }}'
+        #size: Small
         wrap: true
-      type: TableCell
-    type: TableRow
 {% endif %}
 {% if precalc.approvers %}
-  - cells:
-    - items:
-      - text: Approvals
-        type: TextBlock
+  - type: TableRow
+    cells:
+    - type: TableCell
+      verticalContentAlignment: Center
+      items:
+      - type: TextBlock
+        text: Approvals
+        size: Small
         weight: Bolder
         wrap: true
-      type: TableCell
-    - items:
-      - text: '{{ precalc.approvers | join(",") }}'
-        type: TextBlock
+    - type: TableCell
+      verticalContentAlignment: Center
+      items:
+      - type: TextBlock
+        text: '{{ precalc.approvers | join(",") }}'
+        #size: Small
         wrap: true
-      type: TableCell
-    type: TableRow
 {% endif %}
 {% if mri.head_pipeline_id %}
-  - cells:
-    - items:
-      - text: Head pipeline
-        type: TextBlock
+  - type: TableRow
+    cells:
+    - type: TableCell
+      verticalContentAlignment: Center
+      items:
+      - type: TextBlock
+        text: Head pipeline
+        size: Small
         weight: Bolder
         wrap: true
-      type: TableCell
+    - type: TableCell
       verticalContentAlignment: Center
-    - items:
-      - text: '[{{ mri.head_pipeline_id }}]({{ precalc.project_url }}/-/pipelines/{{ mri.head_pipeline_id }})'
-        type: TextBlock
+      items:
+      - type: TextBlock
+        text: '[{{ mri.head_pipeline_id }}]({{ precalc.project_url }}/-/pipelines/{{ mri.head_pipeline_id }})'
+        #size: Small
         wrap: true
-      type: TableCell
-      verticalContentAlignment: Center
-    type: TableRow
 {% if precalc.latest_pipeline %}
-  - cells:
-    - items:
-      - text: Pipeline status
-        type: TextBlock
+  - type: TableRow
+    cells:
+    - type: TableCell
+      verticalContentAlignment: Center
+      items:
+      - type: TextBlock
+        text: Pipeline status
+        size: Small
         weight: Bolder
         wrap: true
-      type: TableCell
+    - type: TableCell
       verticalContentAlignment: Center
-    - items:
-      - color: {{ precalc.latest_pipeline.color }}
+      items:
+      - type: TextBlock
+        color: {{ precalc.latest_pipeline.color }}
         text: {{ precalc.latest_pipeline.status }}
-        type: TextBlock
+        #size: Small
         weight: {{ precalc.latest_pipeline.weight }}
         wrap: true
-      type: TableCell
+{% endif %}
+{% endif %}
+  - type: TableRow
+    cells:
+    - type: TableCell
       verticalContentAlignment: Center
-    type: TableRow
-{% endif %}
-{% endif %}
-  - cells:
-    - items:
-      - text: Last update
-        type: TextBlock
+      items:
+      - type: TextBlock
+        text: Last update
+        size: Small
         weight: Bolder
         wrap: true
-      type: TableCell
+    - type: TableCell
       verticalContentAlignment: Center
-    - items:
-      - text: '{{now}}'
-        type: TextBlock
+      items:
+      - type: TextBlock
+        text: '{{now}}'
+        #size: Small
         wrap: true
-      type: TableCell
-      verticalContentAlignment: Center
-    type: TableRow
-  showGridLines: false
-  type: Table
 - actions:
   - title: Overview
     type: Action.OpenUrl
