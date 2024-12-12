@@ -35,12 +35,12 @@ body:
   type: ColumnSet
 - columns:
   - width: 1
-  - width: 2
+  - width: 1
   firstRowAsHeaders: false
   rows:
   - cells:
     - items:
-      - text: Last MR status
+      - text: Last reported status
         type: TextBlock
         weight: Bolder
         wrap: true
@@ -55,7 +55,7 @@ body:
     type: TableRow
   - cells:
     - items:
-      - text: Last MR action
+      - text: Last reported action
         type: TextBlock
         weight: Bolder
         wrap: true
@@ -92,6 +92,37 @@ body:
         wrap: true
       type: TableCell
     type: TableRow
+{% if precalc.assignees %}
+  - cells:
+    - items:
+      - text: Assignees
+        type: TextBlock
+        weight: Bolder
+        wrap: true
+      type: TableCell
+    - items:
+      - text: '{{ precalc.assignees | join(",") }}'
+        type: TextBlock
+        wrap: true
+      type: TableCell
+    type: TableRow
+{% endif %}
+{% if precalc.reviewers %}
+  - cells:
+    - items:
+      - text: Reviewers
+        type: TextBlock
+        weight: Bolder
+        wrap: true
+      type: TableCell
+    - items:
+      - text: '{{ precalc.reviewers | join(",") }}'
+        type: TextBlock
+        wrap: true
+      type: TableCell
+    type: TableRow
+{% endif %}
+{% if precalc.approvers %}
   - cells:
     - items:
       - text: Approvals
@@ -105,6 +136,7 @@ body:
         wrap: true
       type: TableCell
     type: TableRow
+{% endif %}
 {% if mri.head_pipeline_id %}
   - cells:
     - items:

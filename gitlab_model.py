@@ -2,6 +2,7 @@
 from typing import Literal
 
 from pydantic import BaseModel
+from pydantic import Field
 
 
 class GenericPayload(BaseModel, extra="allow"):
@@ -53,6 +54,9 @@ class MergeRequestPayload(BaseModel, extra="allow"):
     user: GLUser
     project: GLProject
     object_attributes: GLMRAttributes
+
+    assignees: list[GLUser] = Field(default_factory=list)
+    reviewers: list[GLUser] = Field(default_factory=list)
 
 
 class GLPipelineBuild(BaseModel, extra="allow"):
