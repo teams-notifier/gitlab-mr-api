@@ -53,6 +53,16 @@ def render(mri: MergeRequestInfos) -> dict[str, Any]:
 
     icon_color: Teams_Color = Teams_Color.ACCENT
 
+    emojis: dict[str, int] = {}
+    emoji_keys = list(mri.merge_request_extra_state.emojis.keys())
+    emoji_keys.sort()
+    for key in emoji_keys:
+        emoji_name, _ = key.split(":")
+        if mri.merge_request_extra_state.emojis[key].event_type == "award":
+            if emoji_name not in emojis:
+                emojis.setdefault(emoji_name, 0)
+            emojis[emoji_name] = emojis[emoji_name] + 1
+
     if mri.merge_request_payload.object_attributes.action == "close":
         icon_color = Teams_Color.ATTENTION
     if mri.merge_request_payload.object_attributes.action == "merge":
@@ -74,6 +84,7 @@ def render(mri: MergeRequestInfos) -> dict[str, Any]:
         "assignees": assignees,
         "reviewers": reviewers,
         "icon_color": icon_color.value,
+        "emojis": emojis,
     }
 
     rendered = templ.render(

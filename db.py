@@ -4,11 +4,13 @@ import json
 import logging
 import urllib.parse
 from typing import Any
+from typing import Literal
 
 import asyncpg.connect_utils
 from pydantic import BaseModel
 
 from config import config
+from gitlab_model import GLEmojiAttributes
 from gitlab_model import MergeRequestPayload
 from gitlab_model import PipelinePayload
 
@@ -92,12 +94,19 @@ class GitlabApprovals(GitlabUser):
     status: str
 
 
+class EmojiEntry(BaseModel, extra="allow"):
+    object_kind: Literal["emoji"]
+    event_type: Literal["award"] | Literal["revoke"]
+    object_attributes: GLEmojiAttributes
+    user: GitlabUser
+
+
 class MergeRequestExtraState(BaseModel):
     version: int
     opener: GitlabUser
     approvers: dict[str, GitlabApprovals]
     pipeline_statuses: dict[str, PipelinePayload]
-    emojis: dict[str, Any]
+    emojis: dict[str, EmojiEntry]
 
 
 class MergeRequestInfos(BaseModel):
@@ -159,6 +168,36 @@ class DBHelper:
         )
         assert isinstance(merge_ref, asyncpg.Record)
         return MergeRequestInfos(**merge_ref)
+
+    async def get_mri_from_url_pid_mriid(
+        self,
+        url: str,
+        project_id: int,
+        mr_iid: int,
+    ) -> MergeRequestInfos | None:
+        gitlab_instance_id = await self.get_gitlab_instance_id_from_url(url)
+
+        connection: asyncpg.Connection
+        async with await database.acquire() as connection:
+            row = await connection.fetchrow(
+                """SELECT
+                        merge_request_ref_id,
+                        merge_request_payload,
+                        merge_request_extra_state,
+                        head_pipeline_id
+                    FROM merge_request_ref
+                    WHERE
+                        gitlab_instance_id = $1
+                        AND gitlab_project_id = $2
+                        AND gitlab_merge_request_iid = $3
+                """,
+                gitlab_instance_id,
+                project_id,
+                mr_iid,
+            )
+            if row is not None:
+                return MergeRequestInfos(**row)
+        return None
 
     async def _generic_norm_upsert(
         self,

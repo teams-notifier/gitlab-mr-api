@@ -206,6 +206,49 @@ body:
         wrap: true
 {% endif %}
 {% endif %}
+{% if precalc.emojis %}
+  - type: TableRow
+    cells:
+    - type: TableCell
+      verticalContentAlignment: Top
+      items:
+      - type: TextBlock
+        text: Emojis
+        size: Small
+        weight: Bolder
+        wrap: true
+    - type: TableCell
+      verticalContentAlignment: Center
+      items:
+
+      - type: Table
+        showGridLines: false
+        columns:
+        - width: 1
+        - width: 20
+        firstRowAsHeaders: false
+        rows:
+{% for emoji, count in precalc.emojis.items() %}
+        - type: TableRow
+          cells:
+          - type: TableCell
+            verticalContentAlignment: Center
+            items:
+            - type: TextBlock
+              text: '{{ count }}'
+              size: Small
+              wrap: true
+              horizontalAlignment: Right
+          - type: TableCell
+            verticalContentAlignment: Center
+            items:
+            - type: TextBlock
+              text: {{ emoji }}
+              size: Small
+              weight: Bolder
+              wrap: true
+{% endfor %}
+{% endif %}
   - type: TableRow
     cells:
     - type: TableCell
