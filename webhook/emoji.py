@@ -4,27 +4,50 @@ import httpx
 
 from cards.render import render
 from db import database
+from db import dbh
+from db import EmojiEntry
+from db import GitlabUser
 from db import MergeRequestInfos
-from gitlab_model import PipelinePayload
+from gitlab_model import EmojiPayload
 from webhook.merge_request import create_or_update_message
 from webhook.merge_request import MRMessRef
 
 
-async def pipeline(
-    pipeline: PipelinePayload,
+async def emoji(
+    emoji: EmojiPayload,
     conversation_tokens: list[str],
 ) -> MergeRequestInfos | None:
+    if emoji.object_attributes.awardable_type != "MergeRequest":
+        return None
+
+    mri = await dbh.get_mri_from_url_pid_mriid(
+        url=emoji.object_attributes.awarded_on_url,
+        project_id=emoji.merge_request.target_project_id,
+        mr_iid=emoji.merge_request.iid,
+    )
+    if mri is None:
+        return None
+    key = f"{emoji.object_attributes.name}:{emoji.object_attributes.user_id}"
     connection: asyncpg.Connection
     async with await database.acquire() as connection:
         res = await connection.fetchrow(
             """UPDATE merge_request_ref
                 SET merge_request_extra_state = jsonb_set(merge_request_extra_state, $1, $2::jsonb)
-                WHERE head_pipeline_id = $3
+                WHERE merge_request_ref_id = $3
                 RETURNING merge_request_ref_id, merge_request_payload,
                             merge_request_extra_state, head_pipeline_id""",
-            ["pipeline_statuses", str(pipeline.object_attributes.id)],
-            pipeline.model_dump(),
-            pipeline.object_attributes.id,
+            ["emojis", key],
+            EmojiEntry(
+                event_type=emoji.event_type,
+                object_attributes=emoji.object_attributes,
+                object_kind=emoji.object_kind,
+                user=GitlabUser(
+                    id=emoji.user.id,
+                    name=emoji.user.name,
+                    username=emoji.user.username,
+                ),
+            ).model_dump(),
+            mri.merge_request_ref_id,
         )
         if res is not None:
             mri = MergeRequestInfos(**res)

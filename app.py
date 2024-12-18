@@ -19,6 +19,7 @@ from fastapi.responses import RedirectResponse
 import webhook
 from config import DefaultConfig
 from db import database
+from gitlab_model import EmojiPayload
 from gitlab_model import MergeRequestPayload
 from gitlab_model import PipelinePayload
 from periodic_cleanup import periodic_cleanup
@@ -88,7 +89,7 @@ def validate_uuid(val: str) -> str | None:
 
 @app.post("/api/v1/gitlab-webhook")
 async def handle_webhook(
-    payload: MergeRequestPayload | PipelinePayload,
+    payload: MergeRequestPayload | PipelinePayload | EmojiPayload,
     x_conversation_token: Annotated[str, Header()],
     x_gitlab_token: Annotated[str, Header()],
 ):
@@ -104,6 +105,8 @@ async def handle_webhook(
             await webhook.merge_request(payload, conversation_tokens)
         if isinstance(payload, PipelinePayload):
             await webhook.pipeline(payload, conversation_tokens)
+        if isinstance(payload, EmojiPayload):
+            await webhook.emoji(payload, conversation_tokens)
         return {"status": "ok"}
     except httpx.HTTPStatusError as exc:
         raise HTTPException(
