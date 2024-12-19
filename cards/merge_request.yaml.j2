@@ -220,33 +220,13 @@ body:
     - type: TableCell
       verticalContentAlignment: Center
       items:
-
-      - type: Table
-        showGridLines: false
-        columns:
-        - width: 1
-        - width: 20
-        firstRowAsHeaders: false
-        rows:
-{% for emoji, count in precalc.emojis.items() %}
-        - type: TableRow
-          cells:
-          - type: TableCell
-            verticalContentAlignment: Center
-            items:
-            - type: TextBlock
-              text: '{{ count }}'
-              size: Small
-              wrap: true
-              horizontalAlignment: Right
-          - type: TableCell
-            verticalContentAlignment: Center
-            items:
-            - type: TextBlock
-              text: {{ emoji }}
-              size: Small
-              weight: Bolder
-              wrap: true
+      - type: ActionSet
+        actions:
+{% for emoji in precalc.emojis %}
+        - type: Action.OpenUrl
+          title: '{{ emoji.count }}'
+          iconUrl: "https://gitlab.com/-/emojis/4/{{ emoji.name }}.png"
+          url: {{ mri.merge_request_payload.object_attributes.url }}
 {% endfor %}
 {% endif %}
   - type: TableRow

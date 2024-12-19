@@ -8,6 +8,7 @@ import yaml
 from jinja2 import Environment
 from jinja2 import FileSystemLoader
 from jinja2 import Template
+from pydantic import BaseModel
 
 from db import MergeRequestInfos
 
@@ -20,6 +21,11 @@ class Teams_Color(Enum):
     GOOD = "good"
     WARNING = "warning"
     ATTENTION = "attention"
+
+
+class EmojiCount(BaseModel):
+    name: str
+    count: int
 
 
 def render(mri: MergeRequestInfos) -> dict[str, Any]:
@@ -53,15 +59,18 @@ def render(mri: MergeRequestInfos) -> dict[str, Any]:
 
     icon_color: Teams_Color = Teams_Color.ACCENT
 
-    emojis: dict[str, int] = {}
+    emoji_count: dict[str, int] = {}
     emoji_keys = list(mri.merge_request_extra_state.emojis.keys())
     emoji_keys.sort()
     for key in emoji_keys:
         emoji_name, _ = key.split(":")
         if mri.merge_request_extra_state.emojis[key].event_type == "award":
-            if emoji_name not in emojis:
-                emojis.setdefault(emoji_name, 0)
-            emojis[emoji_name] = emojis[emoji_name] + 1
+            if emoji_name not in emoji_count:
+                emoji_count.setdefault(emoji_name, 0)
+            emoji_count[emoji_name] = emoji_count[emoji_name] + 1
+
+    emojis: list[EmojiCount] = [EmojiCount(name=name, count=count) for name, count in emoji_count.items()]
+    emojis.sort(key=lambda x: (-x.count, x.name))
 
     if mri.merge_request_payload.object_attributes.action == "close":
         icon_color = Teams_Color.ATTENTION
