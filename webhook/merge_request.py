@@ -134,12 +134,25 @@ async def create_or_update_message(
 async def merge_request(
     mr: MergeRequestPayload,
     conversation_tokens: list[str],
+    participant_ids_filter: list[int],
 ):
     mri = await dbh.get_merge_request_ref_infos(mr)
     convtoken_to_msgrefs = await get_or_create_message_refs(
         mri.merge_request_ref_id,
         conversation_tokens,
     )
+
+    participant_found = True
+    if participant_ids_filter:
+        participant_found = False
+        participant_found |= mri.merge_request_extra_state.opener.id in participant_ids_filter
+        participant_found |= any(
+            [
+                user.id in participant_ids_filter
+                for userlist in (mri.merge_request_payload.assignees, mri.merge_request_payload.reviewers)
+                for user in userlist
+            ]
+        )
 
     connection: asyncpg.Connection
 
@@ -196,7 +209,8 @@ async def merge_request(
                         "merged",
                     )
                     or mr.object_attributes.draft
-                    or mr.object_attributes.work_in_progress,
+                    or mr.object_attributes.work_in_progress
+                    or not participant_found,
                 )
 
     if mr.object_attributes.action in ("merge", "close") or mr.object_attributes.state in (

@@ -92,6 +92,7 @@ async def handle_webhook(
     payload: MergeRequestPayload | PipelinePayload | EmojiPayload,
     x_conversation_token: Annotated[str, Header()],
     x_gitlab_token: Annotated[str, Header()],
+    filter_on_participant_ids: str | None = None,
 ):
     validate_gitlab_token(x_gitlab_token)
     conversation_tokens = list(
@@ -100,9 +101,20 @@ async def handle_webhook(
             [validate_uuid(ct.strip()) for ct in x_conversation_token.split(",")],
         )
     )
+
     try:
         if isinstance(payload, MergeRequestPayload):
-            await webhook.merge_request(payload, conversation_tokens)
+            participant_ids_filter: list[int] = []
+            if filter_on_participant_ids:
+                try:
+                    participant_ids_filter = [int(entry) for entry in filter_on_participant_ids.split(",")]
+                except ValueError:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="filter_on_participant_ids must be a list of comma separated integers",
+                    )
+
+            await webhook.merge_request(payload, conversation_tokens, participant_ids_filter)
         if isinstance(payload, PipelinePayload):
             await webhook.pipeline(payload, conversation_tokens)
         if isinstance(payload, EmojiPayload):

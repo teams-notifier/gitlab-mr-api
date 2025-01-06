@@ -38,6 +38,8 @@ On your GitLab repository, follow these steps to add a new webhook:
 4. Fill out the form with the following details:
 
    * **URL**: https://hostname-of-this-api.example.org/api/v1/gitlab-webhook
+     * Since v0.12.0, you can specify a filter to publish notifications only if certain users are involved as the opener, reviewers, or assignees. \
+       Use query parameters `filter_on_participant_ids` with a comma-separated list of user IDs (integers).
    * **Add custom header**:
      * name: `X-Conversation-Token`
      * value: comma separated list of conversation tokens you want the MR messages sent to
