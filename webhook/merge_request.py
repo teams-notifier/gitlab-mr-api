@@ -219,25 +219,31 @@ async def merge_request(
     ):
 
         async with await database.acquire() as connection:
-            for ct in conversation_tokens:
-                mrmsgref = convtoken_to_msgrefs[ct]
-                if mrmsgref.message_id is None:
-                    continue
-                await connection.execute(
-                    """INSERT INTO msg_to_delete
-                        (message_id, expire_at)
-                    VALUES
-                        ($1, now()+'30 seconds'::INTERVAL)""",
-                    str(mrmsgref.message_id),
-                )
-                await connection.execute(
-                    "DELETE FROM merge_request_message_ref WHERE merge_request_message_ref_id = $1",
-                    mrmsgref.merge_request_message_ref_id,
-                )
-            await connection.execute(
-                "DELETE FROM merge_request_ref WHERE merge_request_ref_id = $1",
+            res = await connection.fetch(
+                """SELECT merge_request_message_ref_id, message_id
+                    FROM merge_request_message_ref
+                    WHERE merge_request_ref_id = $1""",
                 mri.merge_request_ref_id,
             )
+            for row in res:
+                message_id = row.get("message_id")
+                if message_id is not None:
+                    await connection.execute(
+                        """INSERT INTO msg_to_delete
+                            (message_id, expire_at)
+                        VALUES
+                            ($1, now()+'30 seconds'::INTERVAL)""",
+                        str(message_id),
+                    )
+                await connection.execute(
+                    "DELETE FROM merge_request_message_ref WHERE merge_request_message_ref_id = $1",
+                    row.get("merge_request_message_ref_id"),
+                )
+            if len(res):
+                await connection.execute(
+                    "DELETE FROM merge_request_ref WHERE merge_request_ref_id = $1",
+                    mri.merge_request_ref_id,
+                )
 
     return {
         "merge_request_infos": mri,
