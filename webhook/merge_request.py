@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import datetime
 import uuid
 from typing import Any
 
@@ -213,11 +214,22 @@ async def merge_request(
                     or not participant_found,
                 )
 
-    if mr.object_attributes.action in ("merge", "close") or mr.object_attributes.state in (
-        "closed",
-        "merged",
+    if (
+        mr.object_attributes.action
+        in (
+            "merge",
+            "close",
+        )
+        or mr.object_attributes.state
+        in (
+            "closed",
+            "merged",
+        )
+        or mr.object_attributes.draft
+        or mr.object_attributes.work_in_progress
     ):
 
+        message_expiration = datetime.timedelta(seconds=30)
         async with await database.acquire() as connection:
             res = await connection.fetch(
                 """SELECT merge_request_message_ref_id, message_id
@@ -232,8 +244,9 @@ async def merge_request(
                         """INSERT INTO msg_to_delete
                             (message_id, expire_at)
                         VALUES
-                            ($1, now()+'30 seconds'::INTERVAL)""",
+                            ($1, now()+$2::INTERVAL)""",
                         str(message_id),
+                        message_expiration,
                     )
                 await connection.execute(
                     "DELETE FROM merge_request_message_ref WHERE merge_request_message_ref_id = $1",
