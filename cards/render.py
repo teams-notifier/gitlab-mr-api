@@ -28,7 +28,7 @@ class EmojiCount(BaseModel):
     count: int
 
 
-def render(mri: MergeRequestInfos) -> dict[str, Any]:
+def render(mri: MergeRequestInfos, show_collapsible: bool = False) -> dict[str, Any]:
     env = Environment(loader=FileSystemLoader("./cards/"))
     templ: Template = env.get_template("merge_request.yaml.j2")
 
@@ -57,8 +57,6 @@ def render(mri: MergeRequestInfos) -> dict[str, Any]:
 
     reviewers = [reviewers.name for reviewers in mri.merge_request_payload.reviewers]
 
-    icon_color: Teams_Color = Teams_Color.ACCENT
-
     emoji_count: dict[str, int] = {}
     emoji_keys = list(mri.merge_request_extra_state.emojis.keys())
     emoji_keys.sort()
@@ -72,10 +70,22 @@ def render(mri: MergeRequestInfos) -> dict[str, Any]:
     emojis: list[EmojiCount] = [EmojiCount(name=name, count=count) for name, count in emoji_count.items()]
     emojis.sort(key=lambda x: (-x.count, x.name))
 
+    icon_color: Teams_Color = Teams_Color.ACCENT
+    icon_name: str = "BranchRequest"
+
     if mri.merge_request_payload.object_attributes.action == "close":
         icon_color = Teams_Color.ATTENTION
+        icon_name = "CodeTextOff"
     if mri.merge_request_payload.object_attributes.action == "merge":
         icon_color = Teams_Color.GOOD
+        icon_name = "Merge"
+
+    if (
+        mri.merge_request_payload.object_attributes.draft
+        or mri.merge_request_payload.object_attributes.work_in_progress
+    ):
+        icon_color = Teams_Color.DEFAULT
+        icon_name = "Drafts"
 
     precalc = {
         "path_with_namespace": mri.merge_request_payload.project.path_with_namespace,
@@ -101,6 +111,8 @@ def render(mri: MergeRequestInfos) -> dict[str, Any]:
         mri=mri,
         fallback=json.dumps(fallback),
         now=datetime.datetime.now(),
+        show_collapsible=show_collapsible,
+        icon_name=icon_name,
     )
     # print(rendered)
     # open("/tmp/notiteams-gitlab-mr-api-OUTPUT.yaml", "w").write(rendered)
