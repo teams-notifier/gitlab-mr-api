@@ -28,7 +28,11 @@ class EmojiCount(BaseModel):
     count: int
 
 
-def render(mri: MergeRequestInfos, show_collapsible: bool = False) -> dict[str, Any]:
+def render(
+    mri: MergeRequestInfos,
+    collapsed: bool = False,
+    show_collapsible: bool = False,
+) -> dict[str, Any]:
     env = Environment(loader=FileSystemLoader("./cards/"))
     templ: Template = env.get_template("merge_request.yaml.j2")
 
@@ -111,6 +115,7 @@ def render(mri: MergeRequestInfos, show_collapsible: bool = False) -> dict[str, 
         mri=mri,
         fallback=json.dumps(fallback),
         now=datetime.datetime.now(),
+        collapsed=collapsed,
         show_collapsible=show_collapsible,
         icon_name=icon_name,
     )
