@@ -7,6 +7,7 @@ import asyncpg
 import httpx
 from pydantic import BaseModel
 
+import periodic_cleanup
 from cards.render import render
 from config import config
 from db import database
@@ -257,6 +258,7 @@ async def merge_request(
                     "DELETE FROM merge_request_ref WHERE merge_request_ref_id = $1",
                     mri.merge_request_ref_id,
                 )
+            periodic_cleanup.reschedule()
 
     return {
         "merge_request_infos": mri,
