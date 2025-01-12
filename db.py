@@ -69,7 +69,8 @@ class DatabaseLifecycleHandler:
                             "timeout": value.timeout,
                             "elapsed": value.elapsed,
                             "exception": str(value.exception),
-                        }
+                        },
+                        default=str,
                     )
                 )
 

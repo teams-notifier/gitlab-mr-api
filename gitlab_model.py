@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from typing import Any
 from typing import Literal
 
 from pydantic import BaseModel
@@ -35,6 +36,7 @@ class GLMRAttributes(BaseModel, extra="allow"):
     state: str
     url: str
     action: str
+    updated_at: str | None
 
     # https://docs.gitlab.com/ee/api/merge_requests.html#merge-status
     detailed_merge_status: str  # mergeable, not_approved
@@ -54,6 +56,7 @@ class MergeRequestPayload(BaseModel, extra="allow"):
     user: GLUser
     project: GLProject
     object_attributes: GLMRAttributes
+    changes: dict[str, dict[str, Any]]
 
     assignees: list[GLUser] = Field(default_factory=list)
     reviewers: list[GLUser] = Field(default_factory=list)
