@@ -245,7 +245,15 @@ async def merge_request(
             )
 
     mri = await dbh.get_merge_request_ref_infos(mr)
-    should_be_collapsed: bool = mr.object_attributes.draft or mr.object_attributes.work_in_progress
+    should_be_collapsed: bool = (
+        mr.object_attributes.draft
+        or mr.object_attributes.work_in_progress
+        or mr.object_attributes.state
+        in (
+            "closed",
+            "merged",
+        )
+    )
     card = render(
         mri,
         collapsed=should_be_collapsed,
