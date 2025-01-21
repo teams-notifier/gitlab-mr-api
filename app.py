@@ -93,6 +93,7 @@ async def handle_webhook(
     x_conversation_token: Annotated[str, Header()],
     x_gitlab_token: Annotated[str, Header()],
     filter_on_participant_ids: str | None = None,
+    new_commits_revoke_approvals: bool = True,
 ):
     validate_gitlab_token(x_gitlab_token)
     conversation_tokens = list(
@@ -114,7 +115,12 @@ async def handle_webhook(
                         detail="filter_on_participant_ids must be a list of comma separated integers",
                     )
 
-            await webhook.merge_request(payload, conversation_tokens, participant_ids_filter)
+            await webhook.merge_request(
+                payload,
+                conversation_tokens,
+                participant_ids_filter,
+                new_commits_revoke_approvals,
+            )
         if isinstance(payload, PipelinePayload):
             await webhook.pipeline(payload, conversation_tokens)
         if isinstance(payload, EmojiPayload):

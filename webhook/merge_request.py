@@ -142,6 +142,7 @@ async def merge_request(
     mr: MergeRequestPayload,
     conversation_tokens: list[str],
     participant_ids_filter: list[int],
+    new_commits_revoke_approvals: bool,
 ):
     payload_fingerprint = hashlib.sha256(mr.model_dump_json().encode("utf8")).hexdigest()
     logger.debug("payload fingerprint: %s", payload_fingerprint)
@@ -175,6 +176,22 @@ async def merge_request(
             )
             if row is not None:
                 mri.merge_request_extra_state = row["merge_request_extra_state"]
+
+            # If update and oldrev field is set => new commit in MR
+            # Approvals must be reset
+            if new_commits_revoke_approvals and mr.object_attributes.oldrev:
+                row = await connection.fetchrow(
+                    """UPDATE merge_request_ref
+                        SET merge_request_extra_state = jsonb_set(merge_request_extra_state, $1, $2::jsonb)
+                        WHERE merge_request_ref_id = $3
+                        RETURNING merge_request_extra_state""",
+                    ["approvers"],
+                    {},
+                    mri.merge_request_ref_id,
+                )
+                print(mri.merge_request_ref_id)
+                if row is not None:
+                    mri.merge_request_extra_state = row["merge_request_extra_state"]
 
             # if it's a transition from draft to ready
             # - Delete all messages related to this MR prior to the current event update
