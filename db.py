@@ -10,6 +10,7 @@ import asyncpg.connect_utils
 from pydantic import BaseModel
 
 from config import config
+from config import DefaultConfig
 from gitlab_model import GLEmojiAttributes
 from gitlab_model import MergeRequestPayload
 from gitlab_model import PipelinePayload
@@ -34,20 +35,21 @@ class NoResetConnection(asyncpg.connection.Connection):
 
 
 class DatabaseLifecycleHandler:
-    def __init__(self, dsn: str, debug_queries: bool):
+    def __init__(self, conf: DefaultConfig):
         self._pool: asyncpg.Pool | None = None
-        self.debug_queries = debug_queries
-        self.dsn = dsn
+        self._config = conf
 
     async def connect(self):
         log.debug("creating database connection pool")
         self._pool = await asyncpg.create_pool(
-            dsn=self.dsn,
+            dsn=self._config.DATABASE_URL,
             server_settings={
                 "application_name": "notiteams-gitlab-mr-api",
             },
             connection_class=NoResetConnection,
             init=self.init_connection,
+            min_size=self._config.DATABASE_POOL_MIN_SIZE,
+            max_size=self._config.DATABASE_POOL_MAX_SIZE,
         )
 
         # Simple check at startup, will validate database resolution and creds
@@ -58,7 +60,7 @@ class DatabaseLifecycleHandler:
         log.debug("connecting to database")
         await conn.set_type_codec("jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog")
 
-        if self.debug_queries:
+        if self._config.log_queries:
 
             def relog(value: asyncpg.connection.LoggedQuery):
                 log.debug(
@@ -296,5 +298,5 @@ class DBHelper:
         return row
 
 
-database = DatabaseLifecycleHandler(config.DATABASE_URL, config.log_queries)
+database = DatabaseLifecycleHandler(config)
 dbh = DBHelper(database)
