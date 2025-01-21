@@ -12,6 +12,8 @@ class DefaultConfig:
     PORT = int(os.environ.get("PORT", "3980"))
     ACTIVITY_API = os.environ.get("ACTIVITY_API", "")
     DATABASE_URL = os.environ.get("DATABASE_URL", "")
+    DATABASE_POOL_MIN_SIZE = int(os.environ.get("DATABASE_POOL_MIN_SIZE", "1"))
+    DATABASE_POOL_MAX_SIZE = int(os.environ.get("DATABASE_POOL_MAX_SIZE", "10"))
     LOG_QUERIES = os.environ.get("LOG_QUERIES", "")
     VALID_X_GITLAB_TOKEN = os.environ.get("VALID_X_GITLAB_TOKEN", "")
     _valid_tokens: list[str]
