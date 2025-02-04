@@ -1,6 +1,8 @@
 $schema: https://adaptivecards.io/schemas/adaptive-card.json
 type: AdaptiveCard
 version: '1.5'
+msteams:
+  width: Full
 fallbackText: {{ fallback }}
 speak: {{ fallback }}
 body:
@@ -79,8 +81,8 @@ body:
   - type: Table
     showGridLines: false
     columns:
-    - width: 3
-    - width: 7
+    - width: 130px
+    - width: 1
     firstRowAsHeaders: false
     rows:
     - type: TableRow
@@ -167,7 +169,7 @@ body:
         verticalContentAlignment: Center
         items:
         - type: TextBlock
-          text: '{{ precalc.assignees | join(",") }}'
+          text: '{{ precalc.assignees | join(", ") }}'
           #size: Small
           wrap: true
 {% endif %}
@@ -186,7 +188,7 @@ body:
         verticalContentAlignment: Center
         items:
         - type: TextBlock
-          text: '{{ precalc.reviewers | join(",") }}'
+          text: '{{ precalc.reviewers | join(", ") }}'
           #size: Small
           wrap: true
 {% endif %}
@@ -205,7 +207,7 @@ body:
         verticalContentAlignment: Center
         items:
         - type: TextBlock
-          text: '{{ precalc.approvers | join(",") }}'
+          text: '{{ precalc.approvers | join(", ") }}'
           #size: Small
           wrap: true
 {% endif %}
