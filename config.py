@@ -16,6 +16,7 @@ class DefaultConfig:
     DATABASE_POOL_MAX_SIZE = int(os.environ.get("DATABASE_POOL_MAX_SIZE", "10"))
     LOG_QUERIES = os.environ.get("LOG_QUERIES", "")
     VALID_X_GITLAB_TOKEN = os.environ.get("VALID_X_GITLAB_TOKEN", "")
+    MESSAGE_DELETE_DELAY_SECONDS = int(os.environ.get("MESSAGE_DELETE_DELAY_SECONDS", "30"))
     _valid_tokens: list[str]
 
     def __init__(self):

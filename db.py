@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 import asyncio
 import json
-import logging
 import urllib.parse
 from typing import Any
 from typing import Literal
 
 import asyncpg.connect_utils
+import fastapi_structured_logging
 from pydantic import BaseModel
 
 from config import config
@@ -15,7 +15,7 @@ from gitlab_model import GLEmojiAttributes
 from gitlab_model import MergeRequestPayload
 from gitlab_model import PipelinePayload
 
-log = logging.getLogger(__name__)
+log = fastapi_structured_logging.get_logger()
 
 __all__ = ["database", "dbh"]
 

@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 import datetime
 import hashlib
-import logging
 import uuid
 from typing import Any
 
 import asyncpg
-import dateutil.parser
+import fastapi_structured_logging
 import httpx
 from pydantic import BaseModel
 
@@ -17,7 +16,7 @@ from db import database
 from db import dbh
 from gitlab_model import MergeRequestPayload
 
-logger = logging.getLogger(__name__)
+logger = fastapi_structured_logging.get_logger()
 
 
 class MRMessRef(BaseModel):
@@ -34,43 +33,54 @@ async def get_or_create_message_refs(
 
     connection: asyncpg.Connection
     async with await database.acquire() as connection:
-        resset = await connection.fetch(
-            """
-            SELECT
-                merge_request_message_ref_id,
-                conversation_token,
-                message_id
-            FROM
-                merge_request_message_ref
-            WHERE
-                merge_request_ref_id = $1
-            --  AND conversation_token = ANY($2::uuid[])
-            """,
-            merge_request_ref_id,
-            # conv_tokens,
-        )
+        async with connection.transaction():
+            # Lock the MR ref to prevent concurrent modifications
+            await connection.execute(
+                """SELECT 1 FROM merge_request_ref
+                   WHERE merge_request_ref_id = $1
+                   FOR UPDATE""",
+                merge_request_ref_id,
+            )
 
-        for row in resset:
-            convtoken_to_msgrefs[str(row["conversation_token"])] = MRMessRef(**row)
-
-        for conv_token in conv_tokens:
-            if conv_token in convtoken_to_msgrefs:
-                continue
-            row = await connection.fetchrow(
+            resset = await connection.fetch(
                 """
-                INSERT INTO merge_request_message_ref (
-                    merge_request_ref_id, conversation_token
-                ) VALUES (
-                    $1, $2
-                ) RETURNING merge_request_message_ref_id,
-                            conversation_token,
-                            message_id
+                SELECT
+                    merge_request_message_ref_id,
+                    conversation_token,
+                    message_id
+                FROM
+                    merge_request_message_ref
+                WHERE
+                    merge_request_ref_id = $1
+                --  AND conversation_token = ANY($2::uuid[])
                 """,
                 merge_request_ref_id,
-                conv_token,
+                # conv_tokens,
             )
-            assert row is not None
-            convtoken_to_msgrefs[str(row["conversation_token"])] = MRMessRef(**row)
+
+            for row in resset:
+                convtoken_to_msgrefs[str(row["conversation_token"])] = MRMessRef(**row)
+
+            for conv_token in conv_tokens:
+                if conv_token in convtoken_to_msgrefs:
+                    continue
+                row = await connection.fetchrow(
+                    """
+                    INSERT INTO merge_request_message_ref (
+                        merge_request_ref_id, conversation_token
+                    ) VALUES (
+                        $1, $2
+                    ) ON CONFLICT (merge_request_ref_id, conversation_token) DO UPDATE
+                        SET merge_request_ref_id = EXCLUDED.merge_request_ref_id
+                    RETURNING merge_request_message_ref_id,
+                                conversation_token,
+                                message_id
+                    """,
+                    merge_request_ref_id,
+                    conv_token,
+                )
+                assert row is not None
+                convtoken_to_msgrefs[str(row["conversation_token"])] = MRMessRef(**row)
 
     return convtoken_to_msgrefs
 
@@ -98,12 +108,24 @@ async def create_or_update_message(
             return None
 
         payload["conversation_token"] = str(mrmsgref.conversation_token)
-        res = await client.request(
-            "POST",
-            config.ACTIVITY_API + "api/v1/message",
-            json=payload,
-        )
-        response = res.json()
+        try:
+            res = await client.request(
+                "POST",
+                config.ACTIVITY_API + "api/v1/message",
+                json=payload,
+            )
+            res.raise_for_status()
+            response = res.json()
+        except Exception:
+            logger.error(
+                "failed to create message",
+                method="POST",
+                url=config.ACTIVITY_API + "api/v1/message",
+                conversation_token=str(mrmsgref.conversation_token),
+                status_code=res.status_code if "res" in locals() else None,
+                exc_info=True,
+            )
+            raise
 
         connection: asyncpg.Connection
         async with await database.acquire() as connection:
@@ -118,23 +140,36 @@ async def create_or_update_message(
                 mrmsgref.merge_request_message_ref_id,
             )
         if result is None or len(result) == 0:
-            # This case is a race condition so cleanup the second message :)
-            await client.request(
-                "DELETE",
-                config.ACTIVITY_API + "api/v1/message",
-                json={
-                    "message_id": str(response.get("message_id")),
-                },
-            )
+            try:
+                await client.request(
+                    "DELETE",
+                    config.ACTIVITY_API + "api/v1/message",
+                    json={
+                        "message_id": str(response.get("message_id")),
+                    },
+                )
+            except Exception:
+                logger.exception("Failed to delete duplicate message %s", response.get("message_id"))
     else:
         payload["message_id"] = str(mrmsgref.message_id)
-        res = await client.request(
-            "PATCH",
-            config.ACTIVITY_API + "api/v1/message",
-            json=payload,
-        )
-        response = res.json()
-    res.raise_for_status()
+        try:
+            res = await client.request(
+                "PATCH",
+                config.ACTIVITY_API + "api/v1/message",
+                json=payload,
+            )
+            res.raise_for_status()
+            response = res.json()
+        except Exception:
+            logger.error(
+                "failed to update message",
+                method="PATCH",
+                url=config.ACTIVITY_API + "api/v1/message",
+                message_id=str(mrmsgref.message_id),
+                status_code=res.status_code if "res" in locals() else None,
+                exc_info=True,
+            )
+            raise
     return uuid.UUID(response.get("message_id"))
 
 
@@ -146,7 +181,15 @@ async def merge_request(
 ):
     payload_fingerprint = hashlib.sha256(mr.model_dump_json().encode("utf8")).hexdigest()
     logger.debug("payload fingerprint: %s", payload_fingerprint)
+
+    is_closing_action = mr.object_attributes.action in ("merge", "close") or mr.object_attributes.state in (
+        "closed",
+        "merged",
+    )
+
     mri = await dbh.get_merge_request_ref_infos(mr)
+
+    need_cleanup_reschedule = False
 
     participant_found = True
     if participant_ids_filter:
@@ -163,7 +206,6 @@ async def merge_request(
     connection: asyncpg.Connection
 
     if mr.object_attributes.action in ("update"):
-        # Update MR info (head_pipeline_id)
         async with await database.acquire() as connection:
             row = await connection.fetchrow(
                 """UPDATE merge_request_ref
@@ -177,8 +219,6 @@ async def merge_request(
             if row is not None:
                 mri.merge_request_extra_state = row["merge_request_extra_state"]
 
-            # If update and oldrev field is set => new commit in MR
-            # Approvals must be reset
             if new_commits_revoke_approvals and mr.object_attributes.oldrev:
                 row = await connection.fetchrow(
                     """UPDATE merge_request_ref
@@ -193,41 +233,109 @@ async def merge_request(
                 if row is not None:
                     mri.merge_request_extra_state = row["merge_request_extra_state"]
 
-            # if it's a transition from draft to ready
-            # - Delete all messages related to this MR prior to the current event update
-            # then create_or_update_message will re-post new message
-            #  to have cards being the most recent in the feeds.
-            # Rows are used as lock to avoid race condition when multiple instances can receive hooks
-            # for the same MR (multiple webhook same project, multiple instances [kube?])
             if mr.changes and "draft" in mr.changes and not mr.object_attributes.draft:
-                assert mr.object_attributes.updated_at is not None
-                update_ref_datetime = dateutil.parser.parse(mr.object_attributes.updated_at)
+                logger.info(
+                    "draft to ready transition detected - locking and updating all messages",
+                    mr_ref_id=mri.merge_request_ref_id,
+                    fingerprint=payload_fingerprint,
+                )
+
                 message_expiration = datetime.timedelta(seconds=0)
+                timeout = httpx.Timeout(10.0, connect=5.0)
+
                 async with connection.transaction():
-                    res = await connection.fetch(
-                        """SELECT merge_request_message_ref_id, message_id
+                    locked_messages = await connection.fetch(
+                        """SELECT merge_request_message_ref_id, conversation_token, message_id
                             FROM merge_request_message_ref
-                            WHERE merge_request_ref_id = $1 AND created_at < $2
+                            WHERE merge_request_ref_id = $1
                             FOR UPDATE""",
                         mri.merge_request_ref_id,
-                        update_ref_datetime,
                     )
-                    for row in res:
-                        message_id = row.get("message_id")
-                        if message_id is not None:
-                            await connection.execute(
-                                """INSERT INTO msg_to_delete
-                                    (message_id, expire_at)
-                                VALUES
-                                    ($1, now()+$2::INTERVAL)""",
-                                str(message_id),
-                                message_expiration,
-                            )
-                        await connection.execute(
-                            "DELETE FROM merge_request_message_ref WHERE merge_request_message_ref_id = $1",
-                            row.get("merge_request_message_ref_id"),
+
+                    if len(locked_messages) > 0:
+                        logger.info(
+                            "locked messages for draft-to-ready update",
+                            mr_ref_id=mri.merge_request_ref_id,
+                            message_count=len(locked_messages),
                         )
-                periodic_cleanup.reschedule()
+
+                        temp_mri = await dbh.get_merge_request_ref_infos(mr)
+                        temp_card = render(
+                            temp_mri,
+                            collapsed=False,
+                            show_collapsible=False,
+                        )
+                        temp_summary = (
+                            f"MR {temp_mri.merge_request_payload.object_attributes.state}:"
+                            f" {temp_mri.merge_request_payload.object_attributes.title}\n"
+                            f"on {temp_mri.merge_request_payload.project.path_with_namespace}"
+                        )
+
+                        async with httpx.AsyncClient(timeout=timeout) as client:
+                            for row in locked_messages:
+                                message_id = row.get("message_id")
+                                if message_id is not None:
+                                    try:
+                                        payload = {
+                                            "message_id": str(message_id),
+                                            "card": temp_card,
+                                        }
+                                        if temp_summary:
+                                            payload["summary"] = temp_summary
+
+                                        res = await client.request(
+                                            "PATCH",
+                                            config.ACTIVITY_API + "api/v1/message",
+                                            json=payload,
+                                        )
+                                        res.raise_for_status()
+                                        logger.debug(
+                                            "updated message for draft-to-ready",
+                                            message_id=str(message_id),
+                                            mr_ref_id=mri.merge_request_ref_id,
+                                        )
+                                    except Exception:
+                                        logger.error(
+                                            "failed to update message during draft-to-ready",
+                                            method="PATCH",
+                                            url=config.ACTIVITY_API + "api/v1/message",
+                                            message_id=str(message_id),
+                                            mr_ref_id=mri.merge_request_ref_id,
+                                            status_code=res.status_code if "res" in locals() else None,
+                                            exc_info=True,
+                                        )
+
+                        for row in locked_messages:
+                            message_id = row.get("message_id")
+                            if message_id is not None:
+                                await connection.execute(
+                                    """INSERT INTO msg_to_delete
+                                        (message_id, expire_at)
+                                    VALUES
+                                        ($1, now()+$2::INTERVAL)""",
+                                    str(message_id),
+                                    message_expiration,
+                                )
+                            await connection.execute(
+                                """DELETE FROM merge_request_message_ref
+                                        WHERE merge_request_message_ref_id = $1""",
+                                row.get("merge_request_message_ref_id"),
+                            )
+
+                        await connection.execute(
+                            """INSERT INTO webhook_fingerprint (fingerprint, processed_at)
+                                VALUES ($1, now())
+                                ON CONFLICT (fingerprint) DO NOTHING""",
+                            payload_fingerprint,
+                        )
+
+                        logger.info(
+                            "marked all draft messages for deletion",
+                            mr_ref_id=mri.merge_request_ref_id,
+                            message_count=len(locked_messages),
+                            fingerprint=payload_fingerprint,
+                        )
+                        need_cleanup_reschedule = True
 
     if mr.object_attributes.action in ("approved", "unapproved"):
         v = mr.user.model_dump()
@@ -265,66 +373,137 @@ async def merge_request(
         f"on {mri.merge_request_payload.project.path_with_namespace}"
     )
 
-    convtoken_to_msgrefs = await get_or_create_message_refs(
-        mri.merge_request_ref_id,
-        conversation_tokens,
-    )
+    if is_closing_action:
+        logger.info(
+            "close/merge action detected - locking and updating all messages",
+            mr_ref_id=mri.merge_request_ref_id,
+            action=mr.object_attributes.action,
+            state=mr.object_attributes.state,
+            fingerprint=payload_fingerprint,
+        )
 
-    if mr.object_attributes.action in ("open", "reopen") or True:
-        async with httpx.AsyncClient() as client:
+        message_expiration = datetime.timedelta(seconds=config.MESSAGE_DELETE_DELAY_SECONDS)
+        timeout = httpx.Timeout(10.0, connect=5.0)
+
+        async with await database.acquire() as connection:
+            async with connection.transaction():
+                locked_messages = await connection.fetch(
+                    """SELECT merge_request_message_ref_id, conversation_token, message_id
+                        FROM merge_request_message_ref
+                        WHERE merge_request_ref_id = $1
+                        FOR UPDATE""",
+                    mri.merge_request_ref_id,
+                )
+
+                if len(locked_messages) > 0:
+                    logger.info(
+                        "locked messages for update",
+                        mr_ref_id=mri.merge_request_ref_id,
+                        message_count=len(locked_messages),
+                    )
+
+                    async with httpx.AsyncClient(timeout=timeout) as client:
+                        for row in locked_messages:
+                            message_id = row.get("message_id")
+                            if message_id is not None:
+                                try:
+                                    payload = {
+                                        "message_id": str(message_id),
+                                        "card": card,
+                                    }
+                                    if summary:
+                                        payload["summary"] = summary
+
+                                    res = await client.request(
+                                        "PATCH",
+                                        config.ACTIVITY_API + "api/v1/message",
+                                        json=payload,
+                                    )
+                                    res.raise_for_status()
+                                    logger.debug(
+                                        "updated message",
+                                        message_id=str(message_id),
+                                        mr_ref_id=mri.merge_request_ref_id,
+                                    )
+                                except Exception:
+                                    logger.error(
+                                        "failed to update message during close/merge",
+                                        method="PATCH",
+                                        url=config.ACTIVITY_API + "api/v1/message",
+                                        message_id=str(message_id),
+                                        mr_ref_id=mri.merge_request_ref_id,
+                                        status_code=res.status_code if "res" in locals() else None,
+                                        exc_info=True,
+                                    )
+
+                    for row in locked_messages:
+                        message_id = row.get("message_id")
+                        if message_id is not None:
+                            await connection.execute(
+                                """INSERT INTO msg_to_delete
+                                    (message_id, expire_at)
+                                VALUES
+                                    ($1, now()+$2::INTERVAL)""",
+                                str(message_id),
+                                message_expiration,
+                            )
+                        await connection.execute(
+                            "DELETE FROM merge_request_message_ref WHERE merge_request_message_ref_id = $1",
+                            row.get("merge_request_message_ref_id"),
+                        )
+
+                    await connection.execute(
+                        """INSERT INTO webhook_fingerprint (fingerprint, processed_at)
+                            VALUES ($1, now())
+                            ON CONFLICT (fingerprint) DO NOTHING""",
+                        payload_fingerprint,
+                    )
+
+                    logger.info(
+                        "marked all messages for deletion",
+                        mr_ref_id=mri.merge_request_ref_id,
+                        message_count=len(locked_messages),
+                        fingerprint=payload_fingerprint,
+                    )
+                    need_cleanup_reschedule = True
+    else:
+        convtoken_to_msgrefs = await get_or_create_message_refs(
+            mri.merge_request_ref_id,
+            conversation_tokens,
+        )
+
+        timeout = httpx.Timeout(10.0, connect=5.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
             for ct in conversation_tokens:
                 mrmsgref = convtoken_to_msgrefs[ct]
+                original_message_id = mrmsgref.message_id
+
                 mrmsgref.message_id = await create_or_update_message(
                     client,
                     mrmsgref,
                     card=card,
                     summary=summary,
-                    update_only=mr.object_attributes.state
-                    in (
-                        "closed",
-                        "merged",
-                    )
-                    or mr.object_attributes.draft
-                    or mr.object_attributes.work_in_progress
-                    or not participant_found,
+                    update_only=(
+                        (
+                            mr.object_attributes.action not in ("open", "reopen")
+                            and (mr.object_attributes.draft or mr.object_attributes.work_in_progress)
+                        )
+                        or not participant_found
+                    ),
                 )
 
-    if mr.object_attributes.action in (
-        "merge",
-        "close",
-    ) or mr.object_attributes.state in (
-        "closed",
-        "merged",
-    ):
-        message_expiration = datetime.timedelta(seconds=30)
-        async with await database.acquire() as connection:
-            res = await connection.fetch(
-                """SELECT merge_request_message_ref_id, message_id
-                    FROM merge_request_message_ref
-                    WHERE merge_request_ref_id = $1""",
-                mri.merge_request_ref_id,
-            )
-            for row in res:
-                message_id = row.get("message_id")
-                if message_id is not None:
-                    await connection.execute(
-                        """INSERT INTO msg_to_delete
-                            (message_id, expire_at)
-                        VALUES
-                            ($1, now()+$2::INTERVAL)""",
-                        str(message_id),
-                        message_expiration,
-                    )
-                await connection.execute(
-                    "DELETE FROM merge_request_message_ref WHERE merge_request_message_ref_id = $1",
-                    row.get("merge_request_message_ref_id"),
-                )
-            if len(res):
-                await connection.execute(
-                    "DELETE FROM merge_request_ref WHERE merge_request_ref_id = $1",
-                    mri.merge_request_ref_id,
-                )
-            periodic_cleanup.reschedule()
+                if original_message_id is None and mrmsgref.message_id is not None:
+                    async with await database.acquire() as conn:
+                        await conn.execute(
+                            """UPDATE merge_request_message_ref
+                               SET message_id = $1
+                               WHERE merge_request_message_ref_id = $2""",
+                            mrmsgref.message_id,
+                            mrmsgref.merge_request_message_ref_id,
+                        )
+
+    if need_cleanup_reschedule:
+        periodic_cleanup.reschedule()
 
     return {
         "merge_request_infos": mri,
