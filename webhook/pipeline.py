@@ -42,7 +42,8 @@ async def update_message(mri: MergeRequestInfos, conversation_tokens: list[str])
     )
 
     connection: asyncpg.Connection
-    async with await database.acquire() as connection, httpx.AsyncClient() as client:
+    timeout = httpx.Timeout(10.0, connect=5.0)
+    async with await database.acquire() as connection, httpx.AsyncClient(timeout=timeout) as client:
         res = await connection.fetch(
             """
             SELECT merge_request_message_ref_id, conversation_token, message_id
