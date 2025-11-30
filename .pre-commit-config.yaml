@@ -5,7 +5,6 @@ repos:
     rev: 24.10.0
     hooks:
       - id: black
-        args: [--safe, --line-length=110]
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
@@ -50,20 +49,7 @@ repos:
     rev: v1.11.2
     hooks:
       - id: mypy
-        #    files: ^*.py
         additional_dependencies:
           - pydantic
           - types-PyYAML
           - types-python-dateutil
-        args:
-          - --check-untyped-defs
-          - --disallow-any-generics
-          - --ignore-missing-imports
-          - --no-implicit-optional
-          - --show-error-codes
-          - --strict-equality
-          - --warn-redundant-casts
-          - --warn-return-any
-          - --warn-unreachable
-          - --warn-unused-configs
-          - --no-implicit-reexport

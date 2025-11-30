@@ -1,0 +1,51 @@
+[project]
+name = "gitlab-mr-api"
+description = "GitLab MR webhook handler for Teams Notifier"
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "MIT"}
+dynamic = ["version"]
+
+[tool.black]
+line-length = 110
+
+[tool.mypy]
+check_untyped_defs = true
+disallow_any_generics = true
+ignore_missing_imports = true
+no_implicit_optional = true
+show_error_codes = true
+strict_equality = true
+warn_redundant_casts = true
+warn_return_any = true
+warn_unreachable = true
+warn_unused_configs = true
+no_implicit_reexport = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = [
+    "error",
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+markers = [
+    "asyncio: mark test as async",
+    "critical: mark test as critical bug scenario",
+    "race_condition: mark test as race condition scenario",
+    "e2e: mark test as end-to-end test requiring real database",
+]
+
+[tool.coverage.run]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+]

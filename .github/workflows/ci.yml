@@ -1,0 +1,20 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: pre-commit/action@v3.0.1
+      - uses: astral-sh/setup-uv@v7
+      - run: uv venv
+      - run: uv pip install -r requirements.txt -r requirements-dev.txt
+      - run: .venv/bin/pytest --cov
