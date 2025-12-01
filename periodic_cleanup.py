@@ -64,14 +64,6 @@ async def _cleanup_task(config: DefaultConfig, database: DatabaseLifecycleHandle
                                 exc_info=True,
                             )
 
-                deleted_fingerprints = await connection.fetch(
-                    """DELETE FROM webhook_fingerprint
-                        WHERE processed_at < NOW() - INTERVAL '24 hours'
-                        RETURNING fingerprint"""
-                )
-                if len(deleted_fingerprints) > 0:
-                    logger.info("cleaned up old webhook fingerprints", count=len(deleted_fingerprints))
-
                 value = await connection.fetchval("SELECT min(expire_at) FROM msg_to_delete")
                 if value is not None:
                     wait_sec = min(MAX_WAIT, (value - datetime.datetime.now(tz=datetime.UTC)).total_seconds())

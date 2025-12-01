@@ -1,19 +1,25 @@
 #!/usr/bin/env python3
+import hashlib
+
 import asyncpg
-import httpx
+import fastapi_structured_logging
 
 from cards.render import render
 from db import database
 from db import MergeRequestInfos
 from gitlab_model import PipelinePayload
-from webhook.merge_request import create_or_update_message
-from webhook.merge_request import MRMessRef
+from webhook.messaging import update_all_messages_transactional
+
+logger = fastapi_structured_logging.get_logger()
 
 
 async def pipeline(
     pipeline: PipelinePayload,
     conversation_tokens: list[str],
 ) -> MergeRequestInfos | None:
+    payload_fingerprint = hashlib.sha256(pipeline.model_dump_json().encode("utf8")).hexdigest()
+    logger.debug("pipeline payload fingerprint: %s", payload_fingerprint)
+
     connection: asyncpg.Connection
     async with await database.acquire() as connection:
         res = await connection.fetchrow(
@@ -28,38 +34,18 @@ async def pipeline(
         )
         if res is not None:
             mri = MergeRequestInfos(**res)
-            await update_message(mri, conversation_tokens)
+            card = render(mri)
+            summary = (
+                f"MR {mri.merge_request_payload.object_attributes.state}:"
+                f" {mri.merge_request_payload.object_attributes.title}\n"
+                f"on {mri.merge_request_payload.project.path_with_namespace}"
+            )
+            await update_all_messages_transactional(
+                mri,
+                card,
+                summary,
+                payload_fingerprint,
+                "pipeline",
+            )
             return mri
     return None
-
-
-async def update_message(mri: MergeRequestInfos, conversation_tokens: list[str]):
-    card = render(mri)
-    summary = (
-        f"MR {mri.merge_request_payload.object_attributes.state}:"
-        f" {mri.merge_request_payload.object_attributes.title}\n"
-        f"on {mri.merge_request_payload.project.path_with_namespace}"
-    )
-
-    connection: asyncpg.Connection
-    timeout = httpx.Timeout(10.0, connect=5.0)
-    async with await database.acquire() as connection, httpx.AsyncClient(timeout=timeout) as client:
-        res = await connection.fetch(
-            """
-            SELECT merge_request_message_ref_id, conversation_token, message_id
-            FROM merge_request_message_ref
-            WHERE merge_request_ref_id = $1
-            """,
-            mri.merge_request_ref_id,
-        )
-        for row in res:
-            if row["message_id"] is None:
-                continue
-            await create_or_update_message(
-                client,
-                MRMessRef(**row),
-                #  message_text=message_text,
-                card=card,
-                summary=summary,
-                update_only=True,
-            )

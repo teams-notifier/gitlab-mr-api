@@ -81,7 +81,8 @@ CREATE TABLE gitlab_mr_api.merge_request_message_ref (
     message_id uuid,
     failure jsonb,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone
+    updated_at timestamp with time zone,
+    last_processed_fingerprint character varying(64)
 );
 
 
@@ -224,6 +225,7 @@ ALTER TABLE ONLY gitlab_mr_api.merge_request_message_ref
 
 ALTER TABLE ONLY gitlab_mr_api.msg_to_delete
     ADD CONSTRAINT msg_to_delete_pkey PRIMARY KEY (msg_to_delete_id);
+
 
 
 --
