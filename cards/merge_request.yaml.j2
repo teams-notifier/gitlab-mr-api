@@ -34,12 +34,12 @@ body:
     items:
     - type: TextBlock
       size: Large
-      text: '{{ precalc.title | e }}'
+      text: '{{ precalc.title | yaml_sq }}'
       weight: Bolder
       wrap: true
     - type: TextBlock
       size: Small
-      text: Opened by {{ precalc.opener.name }}
+      text: 'Opened by {{ precalc.opener.name | yaml_sq }}'
       Spacing: "None"
       wrap: true
 {% set collapsed = collapsed | default(false) %}
@@ -99,7 +99,7 @@ body:
         verticalContentAlignment: Center
         items:
         - type: TextBlock
-          text: '{{ precalc.detailed_merge_status }}'
+          text: '{{ precalc.detailed_merge_status | yaml_sq }}'
           #size: Small
           wrap: true
     - type: TableRow
@@ -116,7 +116,7 @@ body:
         verticalContentAlignment: Center
         items:
         - type: TextBlock
-          text: '{{ precalc.latest_action }}'
+          text: '{{ precalc.latest_action | yaml_sq }}'
           #size: Small
           wrap: true
     - type: TableRow
@@ -133,7 +133,7 @@ body:
         verticalContentAlignment: Center
         items:
         - type: TextBlock
-          text: '{{ precalc.source_branch }}'
+          text: '{{ precalc.source_branch | yaml_sq }}'
           #size: Small
           wrap: true
     - type: TableRow
@@ -150,7 +150,7 @@ body:
         verticalContentAlignment: Center
         items:
         - type: TextBlock
-          text: '{{ precalc.target_branch }}'
+          text: '{{ precalc.target_branch | yaml_sq }}'
           #size: Small
           wrap: true
 
@@ -169,7 +169,7 @@ body:
         verticalContentAlignment: Center
         items:
         - type: TextBlock
-          text: '{{ precalc.assignees | join(", ") }}'
+          text: '{{ precalc.assignees | join(", ") | yaml_sq }}'
           #size: Small
           wrap: true
 {% endif %}
@@ -188,7 +188,7 @@ body:
         verticalContentAlignment: Center
         items:
         - type: TextBlock
-          text: '{{ precalc.reviewers | join(", ") }}'
+          text: '{{ precalc.reviewers | join(", ") | yaml_sq }}'
           #size: Small
           wrap: true
 {% endif %}
@@ -207,7 +207,7 @@ body:
         verticalContentAlignment: Center
         items:
         - type: TextBlock
-          text: '{{ precalc.approvers | join(", ") }}'
+          text: '{{ precalc.approvers | join(", ") | yaml_sq }}'
           #size: Small
           wrap: true
 {% endif %}
