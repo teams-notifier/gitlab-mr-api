@@ -28,12 +28,18 @@ class EmojiCount(BaseModel):
     count: int
 
 
+def yaml_escape_sq(value: str) -> str:
+    """Escape single quotes for YAML single-quoted strings (' -> '')."""
+    return str(value).replace("'", "''")
+
+
 def render(
     mri: MergeRequestInfos,
     collapsed: bool = False,
     show_collapsible: bool = False,
 ) -> dict[str, Any]:
     env = Environment(loader=FileSystemLoader("./cards/"))
+    env.filters["yaml_sq"] = yaml_escape_sq
     templ: Template = env.get_template("merge_request.yaml.j2")
 
     fallback = (

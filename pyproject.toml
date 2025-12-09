@@ -3,7 +3,7 @@ name = "gitlab-mr-api"
 description = "GitLab MR webhook handler for Teams Notifier"
 readme = "README.md"
 requires-python = ">=3.12"
-license = {text = "MIT"}
+license = "MIT"
 dynamic = ["version"]
 
 [tool.black]
@@ -49,3 +49,7 @@ exclude_lines = [
     "pragma: no cover",
     "if TYPE_CHECKING:",
 ]
+
+[tool.setuptools]
+py-modules = []
+packages = []
