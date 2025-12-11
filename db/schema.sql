@@ -82,7 +82,8 @@ CREATE TABLE gitlab_mr_api.merge_request_message_ref (
     failure jsonb,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone,
-    last_processed_fingerprint character varying(64)
+    last_processed_fingerprint character varying(64),
+    last_processed_updated_at timestamp with time zone
 );
 
 

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 import time
 import uuid
+
+from collections.abc import AsyncGenerator
 from typing import Any
-from typing import AsyncGenerator
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 
@@ -22,7 +23,7 @@ class MockRecord(dict[str, Any]):
         try:
             return self[name]
         except KeyError:
-            raise AttributeError(name)
+            raise AttributeError(name) from None
 
 
 class MockConnection:
@@ -210,6 +211,7 @@ def sample_merge_request_payload():
             email="testuser@example.com",
         ),
         project=GLProject(
+            id=1,
             path_with_namespace="test/project",
             web_url="https://gitlab.example.com/test/project",
         ),
@@ -217,12 +219,12 @@ def sample_merge_request_payload():
             id=123,
             iid=1,
             title="Test MR",
-            created_at="2025-01-01T00:00:00Z",
+            created_at="2025-01-01 00:00:00 UTC",
             draft=False,
             state="merged",
             url="https://gitlab.example.com/test/project/-/merge_requests/1",
             action="merge",
-            updated_at="2025-01-01T00:00:00Z",
+            updated_at="2025-01-01 00:00:00 UTC",
             detailed_merge_status="mergeable",
             head_pipeline_id=None,
             work_in_progress=False,

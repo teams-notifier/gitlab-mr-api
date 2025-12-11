@@ -5,13 +5,14 @@ import asyncpg
 import fastapi_structured_logging
 
 from cards.render import render
-from db import database
-from db import dbh
 from db import EmojiEntry
 from db import GitlabUser
 from db import MergeRequestInfos
+from db import database
+from db import dbh
 from gitlab_model import EmojiPayload
 from webhook.messaging import update_all_messages_transactional
+
 
 logger = fastapi_structured_logging.get_logger()
 
@@ -24,7 +25,13 @@ async def emoji(
         return None
 
     payload_fingerprint = hashlib.sha256(emoji.model_dump_json().encode("utf8")).hexdigest()
-    logger.debug("emoji payload fingerprint: %s", payload_fingerprint)
+    logger.info(
+        "processing emoji hook",
+        project_id=emoji.merge_request.target_project_id,
+        merge_request_iid=emoji.merge_request.iid,
+        object_kind=emoji.object_kind,
+        fingerprint=payload_fingerprint,
+    )
 
     mri = await dbh.get_mri_from_url_pid_mriid(
         url=emoji.object_attributes.awarded_on_url,
@@ -69,6 +76,7 @@ async def emoji(
                 card,
                 summary,
                 payload_fingerprint,
+                None,
                 "emoji",
             )
             return mri

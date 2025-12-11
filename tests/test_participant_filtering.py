@@ -8,7 +8,9 @@ Tests that messages are only created/updated when:
 - Assignees/reviewers are in the filter
 - MR opener is in the filter
 """
+
 import uuid
+
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
@@ -58,17 +60,19 @@ async def test_no_filter_creates_message(mr_with_participants, mock_database):
     connection = mock_database.connection
     connection.fetchrow.return_value = {"merge_request_message_ref_id": 1}
 
+    sample_mri = make_mock_mri(mr_with_participants)
+
     with (
         patch("webhook.merge_request.database", mock_database),
         patch("webhook.messaging.database", mock_database),
-        patch("webhook.merge_request.dbh.get_merge_request_ref_infos") as mock_dbh,
+        patch("webhook.merge_request.dbh.get_or_create_merge_request_ref_id", return_value=1),
+        patch("webhook.merge_request.dbh.update_merge_request_ref_payload", return_value=sample_mri),
+        patch("webhook.merge_request.dbh.get_merge_request_ref_infos", return_value=sample_mri),
         patch("webhook.merge_request.render") as mock_render,
         patch("webhook.merge_request.get_or_create_message_refs") as mock_get_or_create,
         patch("webhook.merge_request.get_all_message_refs") as mock_get_all,
         patch("httpx.AsyncClient") as mock_client_class,
     ):
-
-        mock_dbh.return_value = make_mock_mri(mr_with_participants)
         mock_render.return_value = {"type": "AdaptiveCard"}
         mock_get_or_create.return_value = {str(conv_token): msg_ref}
         mock_get_all.return_value = [msg_ref]
@@ -107,17 +111,19 @@ async def test_opener_in_filter_creates_message(mr_with_participants, mock_datab
     connection = mock_database.connection
     connection.fetchrow.return_value = {"merge_request_message_ref_id": 1}
 
+    sample_mri = make_mock_mri(mr_with_participants)
+
     with (
         patch("webhook.merge_request.database", mock_database),
         patch("webhook.messaging.database", mock_database),
-        patch("webhook.merge_request.dbh.get_merge_request_ref_infos") as mock_dbh,
+        patch("webhook.merge_request.dbh.get_or_create_merge_request_ref_id", return_value=1),
+        patch("webhook.merge_request.dbh.update_merge_request_ref_payload", return_value=sample_mri),
+        patch("webhook.merge_request.dbh.get_merge_request_ref_infos", return_value=sample_mri),
         patch("webhook.merge_request.render") as mock_render,
         patch("webhook.merge_request.get_or_create_message_refs") as mock_get_or_create,
         patch("webhook.merge_request.get_all_message_refs") as mock_get_all,
         patch("httpx.AsyncClient") as mock_client_class,
     ):
-
-        mock_dbh.return_value = make_mock_mri(mr_with_participants)
         mock_render.return_value = {"type": "AdaptiveCard"}
         mock_get_or_create.return_value = {str(conv_token): msg_ref}
         mock_get_all.return_value = [msg_ref]
@@ -154,17 +160,19 @@ async def test_assignee_in_filter_creates_message(mr_with_participants, mock_dat
     connection = mock_database.connection
     connection.fetchrow.return_value = {"merge_request_message_ref_id": 1}
 
+    sample_mri = make_mock_mri(mr_with_participants)
+
     with (
         patch("webhook.merge_request.database", mock_database),
         patch("webhook.messaging.database", mock_database),
-        patch("webhook.merge_request.dbh.get_merge_request_ref_infos") as mock_dbh,
+        patch("webhook.merge_request.dbh.get_or_create_merge_request_ref_id", return_value=1),
+        patch("webhook.merge_request.dbh.update_merge_request_ref_payload", return_value=sample_mri),
+        patch("webhook.merge_request.dbh.get_merge_request_ref_infos", return_value=sample_mri),
         patch("webhook.merge_request.render") as mock_render,
         patch("webhook.merge_request.get_or_create_message_refs") as mock_get_or_create,
         patch("webhook.merge_request.get_all_message_refs") as mock_get_all,
         patch("httpx.AsyncClient") as mock_client_class,
     ):
-
-        mock_dbh.return_value = make_mock_mri(mr_with_participants)
         mock_render.return_value = {"type": "AdaptiveCard"}
         mock_get_or_create.return_value = {str(conv_token): msg_ref}
         mock_get_all.return_value = [msg_ref]
@@ -201,17 +209,19 @@ async def test_reviewer_in_filter_creates_message(mr_with_participants, mock_dat
     connection = mock_database.connection
     connection.fetchrow.return_value = {"merge_request_message_ref_id": 1}
 
+    sample_mri = make_mock_mri(mr_with_participants)
+
     with (
         patch("webhook.merge_request.database", mock_database),
         patch("webhook.messaging.database", mock_database),
-        patch("webhook.merge_request.dbh.get_merge_request_ref_infos") as mock_dbh,
+        patch("webhook.merge_request.dbh.get_or_create_merge_request_ref_id", return_value=1),
+        patch("webhook.merge_request.dbh.update_merge_request_ref_payload", return_value=sample_mri),
+        patch("webhook.merge_request.dbh.get_merge_request_ref_infos", return_value=sample_mri),
         patch("webhook.merge_request.render") as mock_render,
         patch("webhook.merge_request.get_or_create_message_refs") as mock_get_or_create,
         patch("webhook.merge_request.get_all_message_refs") as mock_get_all,
         patch("httpx.AsyncClient") as mock_client_class,
     ):
-
-        mock_dbh.return_value = make_mock_mri(mr_with_participants)
         mock_render.return_value = {"type": "AdaptiveCard"}
         mock_get_or_create.return_value = {str(conv_token): msg_ref}
         mock_get_all.return_value = [msg_ref]
@@ -249,17 +259,19 @@ async def test_no_participant_match_uses_update_only(mr_with_participants, mock_
     connection = mock_database.connection
     connection.fetchrow.return_value = {"merge_request_message_ref_id": 1}
 
+    sample_mri = make_mock_mri(mr_with_participants)
+
     with (
         patch("webhook.merge_request.database", mock_database),
         patch("webhook.messaging.database", mock_database),
-        patch("webhook.merge_request.dbh.get_merge_request_ref_infos") as mock_dbh,
+        patch("webhook.merge_request.dbh.get_or_create_merge_request_ref_id", return_value=1),
+        patch("webhook.merge_request.dbh.update_merge_request_ref_payload", return_value=sample_mri),
+        patch("webhook.merge_request.dbh.get_merge_request_ref_infos", return_value=sample_mri),
         patch("webhook.merge_request.render") as mock_render,
         patch("webhook.merge_request.get_or_create_message_refs") as mock_get_or_create,
         patch("webhook.merge_request.get_all_message_refs") as mock_get_all,
         patch("httpx.AsyncClient") as mock_client_class,
     ):
-
-        mock_dbh.return_value = make_mock_mri(mr_with_participants)
         mock_render.return_value = {"type": "AdaptiveCard"}
         mock_get_or_create.return_value = {str(conv_token): msg_ref}
         mock_get_all.return_value = [msg_ref]
@@ -298,17 +310,19 @@ async def test_multiple_participants_in_filter(mr_with_participants, mock_databa
     connection = mock_database.connection
     connection.fetchrow.return_value = {"merge_request_message_ref_id": 1}
 
+    sample_mri = make_mock_mri(mr_with_participants)
+
     with (
         patch("webhook.merge_request.database", mock_database),
         patch("webhook.messaging.database", mock_database),
-        patch("webhook.merge_request.dbh.get_merge_request_ref_infos") as mock_dbh,
+        patch("webhook.merge_request.dbh.get_or_create_merge_request_ref_id", return_value=1),
+        patch("webhook.merge_request.dbh.update_merge_request_ref_payload", return_value=sample_mri),
+        patch("webhook.merge_request.dbh.get_merge_request_ref_infos", return_value=sample_mri),
         patch("webhook.merge_request.render") as mock_render,
         patch("webhook.merge_request.get_or_create_message_refs") as mock_get_or_create,
         patch("webhook.merge_request.get_all_message_refs") as mock_get_all,
         patch("httpx.AsyncClient") as mock_client_class,
     ):
-
-        mock_dbh.return_value = make_mock_mri(mr_with_participants)
         mock_render.return_value = {"type": "AdaptiveCard"}
         mock_get_or_create.return_value = {str(conv_token): msg_ref}
         mock_get_all.return_value = [msg_ref]
@@ -342,6 +356,7 @@ def test_filter_validation_in_endpoint(test_database_url):
     database._config = config
 
     from fastapi.testclient import TestClient
+
     from app import app
 
     with TestClient(app) as client:
@@ -360,12 +375,12 @@ def test_filter_validation_in_endpoint(test_database_url):
                     "id": 123,
                     "iid": 1,
                     "title": "Test MR",
-                    "created_at": "2025-01-01T00:00:00Z",
+                    "created_at": "2025-01-01 00:00:00 UTC",
                     "draft": False,
                     "state": "opened",
                     "url": "https://gitlab.example.com/test/project/-/merge_requests/1",
                     "action": "open",
-                    "updated_at": "2025-01-01T00:00:00Z",
+                    "updated_at": "2025-01-01 00:00:00 UTC",
                     "detailed_merge_status": "mergeable",
                     "head_pipeline_id": None,
                     "work_in_progress": False,
@@ -394,6 +409,7 @@ def test_invalid_filter_format_returns_400(test_database_url):
     database._config = config
 
     from fastapi.testclient import TestClient
+
     from app import app
 
     with TestClient(app) as client:
@@ -412,12 +428,12 @@ def test_invalid_filter_format_returns_400(test_database_url):
                     "id": 123,
                     "iid": 1,
                     "title": "Test MR",
-                    "created_at": "2025-01-01T00:00:00Z",
+                    "created_at": "2025-01-01 00:00:00 UTC",
                     "draft": False,
                     "state": "opened",
                     "url": "https://gitlab.example.com/test/project/-/merge_requests/1",
                     "action": "open",
-                    "updated_at": "2025-01-01T00:00:00Z",
+                    "updated_at": "2025-01-01 00:00:00 UTC",
                     "detailed_merge_status": "mergeable",
                     "head_pipeline_id": None,
                     "work_in_progress": False,
@@ -453,17 +469,19 @@ async def test_draft_mr_with_non_participant_uses_update_only(mr_with_participan
     connection = mock_database.connection
     connection.fetchrow.return_value = {"merge_request_message_ref_id": 1}
 
+    sample_mri = make_mock_mri(mr_with_participants)
+
     with (
         patch("webhook.merge_request.database", mock_database),
         patch("webhook.messaging.database", mock_database),
-        patch("webhook.merge_request.dbh.get_merge_request_ref_infos") as mock_dbh,
+        patch("webhook.merge_request.dbh.get_or_create_merge_request_ref_id", return_value=1),
+        patch("webhook.merge_request.dbh.update_merge_request_ref_payload", return_value=sample_mri),
+        patch("webhook.merge_request.dbh.get_merge_request_ref_infos", return_value=sample_mri),
         patch("webhook.merge_request.render") as mock_render,
         patch("webhook.merge_request.get_or_create_message_refs") as mock_get_or_create,
         patch("webhook.merge_request.get_all_message_refs") as mock_get_all,
         patch("httpx.AsyncClient") as mock_client_class,
     ):
-
-        mock_dbh.return_value = make_mock_mri(mr_with_participants)
         mock_render.return_value = {"type": "AdaptiveCard"}
         mock_get_or_create.return_value = {str(conv_token): msg_ref}
         mock_get_all.return_value = [msg_ref]

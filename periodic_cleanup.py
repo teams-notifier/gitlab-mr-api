@@ -9,6 +9,7 @@ import httpx
 from config import DefaultConfig
 from db import DatabaseLifecycleHandler
 
+
 logger = fastapi_structured_logging.get_logger()
 
 signal = asyncio.Event()

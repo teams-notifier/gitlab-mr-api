@@ -4,10 +4,13 @@ E2E validation of critical bugs with real database.
 
 These tests demonstrate the bugs exist with real database operations.
 """
+
 import uuid
+
 from unittest.mock import patch
 
 import pytest
+
 
 pytestmark = pytest.mark.e2e
 
@@ -54,8 +57,8 @@ def mr_payload():
             "assignee_id": None,
             "iid": 1,
             "title": "Test MR",
-            "created_at": "2025-01-01T00:00:00Z",
-            "updated_at": "2025-01-01T00:00:00Z",
+            "created_at": "2025-01-01 00:00:00 UTC",
+            "updated_at": "2025-01-01 00:00:00 UTC",
             "state": "opened",
             "merge_status": "can_be_merged",
             "detailed_merge_status": "not_open",
@@ -89,10 +92,11 @@ async def test_e2e_bug_non_transactional_deletion(
     All deletion operations (INSERT into msg_to_delete + DELETE from refs)
     happen within a transaction, ensuring consistency.
     """
-    from db import DBHelper, DatabaseLifecycleHandler
     from config import DefaultConfig
-    from webhook.merge_request import merge_request
+    from db import DatabaseLifecycleHandler
+    from db import DBHelper
     from gitlab_model import MergeRequestPayload
+    from webhook.merge_request import merge_request
 
     config = DefaultConfig()
     config.DATABASE_URL = test_database_url
@@ -110,7 +114,6 @@ async def test_e2e_bug_non_transactional_deletion(
         patch("webhook.merge_request.render") as mock_render,
         patch("webhook.merge_request.periodic_cleanup"),
     ):
-
         mock_render.return_value = {"type": "AdaptiveCard"}
 
         # Create MR with open action

@@ -4,11 +4,14 @@ E2E tests with real PostgreSQL database.
 
 Tests application code (DBHelper, messaging) against a real database.
 """
+
 import uuid
+
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
+
 
 pytestmark = pytest.mark.e2e
 

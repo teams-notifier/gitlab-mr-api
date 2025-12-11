@@ -2,7 +2,9 @@
 """
 Tests for emoji and pipeline webhook handlers.
 """
+
 import hashlib
+
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
@@ -62,6 +64,7 @@ def sample_mri():
     mri.merge_request_ref_id = 1
     mri.merge_request_payload.object_attributes.state = "opened"
     mri.merge_request_payload.object_attributes.title = "Test MR"
+    mri.merge_request_payload.object_attributes.updated_at = "2025-01-01 00:00:00 UTC"
     mri.merge_request_payload.project.path_with_namespace = "test/project"
     return mri
 
@@ -283,7 +286,6 @@ class TestPipelineHandler:
             patch("webhook.pipeline.update_all_messages_transactional"),
             patch("webhook.pipeline.MergeRequestInfos", return_value=sample_mri),
         ):
-
             mock_conn = MagicMock()
             mock_conn.fetchval = AsyncMock(return_value=None)
             mock_conn.fetchrow = AsyncMock(
@@ -322,20 +324,18 @@ class TestFingerprintDeduplication:
             patch("webhook.emoji.dbh.get_mri_from_url_pid_mriid", return_value=sample_mri),
             patch("webhook.emoji.logger") as mock_logger,
         ):
-
             mock_conn.fetchval.return_value = None
             mock_conn.fetchrow.return_value = None
 
             await emoji(sample_emoji_payload, ["token-1"])
 
-            debug_calls = [call for call in mock_logger.debug.call_args_list if "fingerprint" in str(call)]
-            assert len(debug_calls) > 0
+            info_calls = [call for call in mock_logger.info.call_args_list if "fingerprint" in str(call)]
+            assert len(info_calls) > 0
 
     async def test_pipeline_logs_fingerprint_on_entry(self, sample_pipeline_payload):
         from webhook.pipeline import pipeline
 
         with patch("webhook.pipeline.database") as mock_db, patch("webhook.pipeline.logger") as mock_logger:
-
             mock_conn = MagicMock()
             mock_conn.fetchval = AsyncMock(return_value=None)
             mock_conn.fetchrow = AsyncMock(return_value=None)
@@ -347,8 +347,8 @@ class TestFingerprintDeduplication:
 
             await pipeline(sample_pipeline_payload, ["token-1"])
 
-            debug_calls = [call for call in mock_logger.debug.call_args_list if "fingerprint" in str(call)]
-            assert len(debug_calls) > 0
+            info_calls = [call for call in mock_logger.info.call_args_list if "fingerprint" in str(call)]
+            assert len(info_calls) > 0
 
 
 class TestCriticalErrorPaths:

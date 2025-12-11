@@ -7,6 +7,7 @@ Tests DBHelper methods:
 - get_merge_request_ref_infos
 - _generic_norm_upsert
 """
+
 from typing import Any
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
@@ -26,7 +27,7 @@ class MockRecord(dict[str, Any]):
         try:
             return self[name]
         except KeyError:
-            raise AttributeError(name)
+            raise AttributeError(name) from None
 
 
 # Store original Record for restoration
@@ -336,8 +337,9 @@ async def test_generic_norm_upsert_with_insert_only_vals(mock_database):
 @pytest.mark.asyncio
 async def test_generic_norm_upsert_race_condition_handling(mock_database):
     """Test generic upsert handles race condition (UniqueViolationError)."""
-    from db import DBHelper
     import asyncpg.exceptions
+
+    from db import DBHelper
 
     connection = mock_database.connection
 
@@ -379,8 +381,8 @@ async def test_generic_norm_upsert_race_condition_handling(mock_database):
 @pytest.mark.asyncio
 async def test_database_lifecycle_connect_disconnect(mock_database):
     """Test database connection lifecycle."""
-    from db import DatabaseLifecycleHandler
     from config import DefaultConfig
+    from db import DatabaseLifecycleHandler
 
     config = DefaultConfig()
 

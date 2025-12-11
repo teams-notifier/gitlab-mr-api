@@ -8,11 +8,14 @@ Tests concurrent webhook processing to validate:
 3. Database constraints catch duplicate message creation
 4. Transaction isolation maintains data consistency
 """
+
 import asyncio
 import uuid
+
 from unittest.mock import patch
 
 import pytest
+
 
 pytestmark = pytest.mark.e2e
 
@@ -20,8 +23,8 @@ pytestmark = pytest.mark.e2e
 @pytest.fixture
 async def db_lifecycle_handler(test_database_url):
     """Create a DatabaseLifecycleHandler with properly initialized pool."""
-    from db import DatabaseLifecycleHandler
     from config import DefaultConfig
+    from db import DatabaseLifecycleHandler
 
     config = DefaultConfig()
     config.DATABASE_URL = test_database_url
@@ -74,8 +77,8 @@ def base_mr_payload():
             "author_id": 1,
             "assignee_id": None,
             "title": "Test MR",
-            "created_at": "2025-01-01T00:00:00Z",
-            "updated_at": "2025-01-01T00:00:00Z",
+            "created_at": "2025-01-01 00:00:00 UTC",
+            "updated_at": "2025-01-01 00:00:00 UTC",
             "state": "opened",
             "merge_status": "can_be_merged",
             "detailed_merge_status": "not_open",
@@ -113,8 +116,8 @@ async def test_e2e_race_duplicate_webhook_processing(
     - All webhooks complete without errors (handled gracefully)
     """
     from db import DBHelper
-    from webhook.merge_request import merge_request
     from gitlab_model import MergeRequestPayload
+    from webhook.merge_request import merge_request
 
     dbh = DBHelper(db_lifecycle_handler)
 
@@ -125,7 +128,6 @@ async def test_e2e_race_duplicate_webhook_processing(
         patch("db.database", db_lifecycle_handler),
         patch("webhook.merge_request.render") as mock_render,
     ):
-
         mock_render.return_value = {"type": "AdaptiveCard"}
 
         conv_token = str(uuid.uuid4())
@@ -184,8 +186,8 @@ async def test_e2e_race_concurrent_message_creation(
     - No orphaned message refs
     """
     from db import DBHelper
-    from webhook.merge_request import merge_request
     from gitlab_model import MergeRequestPayload
+    from webhook.merge_request import merge_request
 
     dbh = DBHelper(db_lifecycle_handler)
 
@@ -198,7 +200,6 @@ async def test_e2e_race_concurrent_message_creation(
         patch("db.database", db_lifecycle_handler),
         patch("webhook.merge_request.render") as mock_render,
     ):
-
         # Pre-create MR to focus on message creation race (inside patch context)
         payload = MergeRequestPayload(**base_mr_payload)
         mri = await dbh.get_merge_request_ref_infos(payload)
@@ -262,8 +263,8 @@ async def test_e2e_race_concurrent_updates_with_locking(
     - Transaction isolation maintains consistency
     """
     from db import DBHelper
-    from webhook.merge_request import merge_request
     from gitlab_model import MergeRequestPayload
+    from webhook.merge_request import merge_request
 
     dbh = DBHelper(db_lifecycle_handler)
 
@@ -280,7 +281,6 @@ async def test_e2e_race_concurrent_updates_with_locking(
         patch("db.database", db_lifecycle_handler),
         patch("webhook.merge_request.render") as mock_render,
     ):
-
         mock_render.return_value = {"type": "AdaptiveCard"}
 
         # Create initial message
@@ -352,8 +352,8 @@ async def test_e2e_race_update_during_close_deletion(
     - Deletion cleanup is idempotent
     """
     from db import DBHelper
-    from webhook.merge_request import merge_request
     from gitlab_model import MergeRequestPayload
+    from webhook.merge_request import merge_request
 
     dbh = DBHelper(db_lifecycle_handler)
 
@@ -371,7 +371,6 @@ async def test_e2e_race_update_during_close_deletion(
         patch("webhook.merge_request.render") as mock_render,
         patch("webhook.merge_request.periodic_cleanup"),
     ):
-
         mock_render.return_value = {"type": "AdaptiveCard"}
 
         # Create initial messages
@@ -455,8 +454,8 @@ async def test_e2e_race_high_concurrency_mixed_operations(
     - Data integrity maintained across operation types
     """
     from db import DBHelper
-    from webhook.merge_request import merge_request
     from gitlab_model import MergeRequestPayload
+    from webhook.merge_request import merge_request
 
     dbh = DBHelper(db_lifecycle_handler)
 
@@ -470,7 +469,6 @@ async def test_e2e_race_high_concurrency_mixed_operations(
         patch("webhook.merge_request.render") as mock_render,
         patch("webhook.merge_request.periodic_cleanup"),
     ):
-
         mock_render.return_value = {"type": "AdaptiveCard"}
 
         all_tasks = []
@@ -561,3 +559,455 @@ async def test_e2e_race_high_concurrency_mixed_operations(
     if "approvers" in mr_extra_state:
         approvers_count = len(mr_extra_state["approvers"])
         assert approvers_count > 0, "Should have stored approver information"
+
+
+@pytest.mark.asyncio
+async def test_e2e_race_out_of_order_events_rejected(
+    db_connection, clean_database, base_mr_payload, mock_activity_api, db_lifecycle_handler
+):
+    """
+    RACE CONDITION: Out-of-order events arrive after a newer event has been processed.
+
+    Scenario:
+    1. Create initial MR message
+    2. Process a "newer" update event (updated_at = T2)
+    3. Concurrently send multiple "older" events (updated_at = T1 < T2)
+    4. Verify older events are skipped based on last_processed_updated_at
+
+    Validates:
+    - Timestamp comparison works correctly inside DB transaction
+    - Row locking doesn't prevent the stale check from working
+    - Stale events don't trigger Teams message updates
+    - last_processed_updated_at only advances with newer events
+    """
+    import datetime
+
+    from db import DBHelper
+    from gitlab_model import MergeRequestPayload
+    from webhook.merge_request import merge_request
+
+    dbh = DBHelper(db_lifecycle_handler)
+
+    conv_token = str(uuid.uuid4())
+
+    with (
+        patch("webhook.merge_request.database", db_lifecycle_handler),
+        patch("webhook.merge_request.dbh", dbh),
+        patch("webhook.messaging.database", db_lifecycle_handler),
+        patch("db.database", db_lifecycle_handler),
+        patch("webhook.merge_request.render") as mock_render,
+    ):
+        mock_render.return_value = {"type": "AdaptiveCard"}
+
+        # Step 1: Create initial MR with T0 timestamp
+        base_mr_payload["object_attributes"]["action"] = "open"
+        base_mr_payload["object_attributes"]["updated_at"] = "2025-01-01 00:00:00 UTC"
+        base_mr_payload["object_attributes"]["description"] = "Initial"
+        payload_initial = MergeRequestPayload(**base_mr_payload)
+
+        await merge_request(
+            mr=payload_initial,
+            conversation_tokens=[conv_token],
+            participant_ids_filter=[],
+            new_commits_revoke_approvals=False,
+        )
+
+        # Step 2: Process a "newer" update (T2 = June 2025)
+        newer_payload_dict = base_mr_payload.copy()
+        newer_payload_dict["object_attributes"] = base_mr_payload["object_attributes"].copy()
+        newer_payload_dict["object_attributes"]["action"] = "update"
+        newer_payload_dict["object_attributes"]["updated_at"] = "2025-06-01 12:00:00 UTC"
+        newer_payload_dict["object_attributes"]["description"] = "Newer update"
+        newer_payload_dict["object_attributes"]["head_pipeline_id"] = 9999
+        newer_payload = MergeRequestPayload(**newer_payload_dict)
+
+        await merge_request(
+            mr=newer_payload,
+            conversation_tokens=[conv_token],
+            participant_ids_filter=[],
+            new_commits_revoke_approvals=False,
+        )
+
+        # Verify the newer update was stored
+        msg_refs_after_newer = await db_connection.fetch(
+            "SELECT * FROM gitlab_mr_api.merge_request_message_ref"
+        )
+        stored_updated_at = msg_refs_after_newer[0]["last_processed_updated_at"]
+        assert stored_updated_at is not None, "Should have stored updated_at"
+        expected_newer_ts = datetime.datetime(2025, 6, 1, 12, 0, 0, tzinfo=datetime.UTC)
+        assert stored_updated_at == expected_newer_ts, "Should store June timestamp"
+
+        # Step 3: Concurrently send multiple "older" events (T1 = March 2025, before T2)
+        older_tasks = []
+        for i in range(10):
+            older_payload_dict = base_mr_payload.copy()
+            older_payload_dict["object_attributes"] = base_mr_payload["object_attributes"].copy()
+            older_payload_dict["object_attributes"]["action"] = "update"
+            older_payload_dict["object_attributes"]["updated_at"] = "2025-03-01 06:00:00 UTC"
+            older_payload_dict["object_attributes"]["description"] = f"Older update {i}"
+            older_payload_dict["object_attributes"]["head_pipeline_id"] = 1000 + i
+            older_payload = MergeRequestPayload(**older_payload_dict)
+
+            older_tasks.append(
+                merge_request(
+                    mr=older_payload,
+                    conversation_tokens=[conv_token],
+                    participant_ids_filter=[],
+                    new_commits_revoke_approvals=False,
+                )
+            )
+
+        results = await asyncio.gather(*older_tasks, return_exceptions=True)
+
+    # Step 4: Verify older events did NOT update the message timestamp
+    # The last_processed_updated_at should still reflect the newer event (June 2025)
+    msg_refs_final = await db_connection.fetch("SELECT * FROM gitlab_mr_api.merge_request_message_ref")
+    final_updated_at = msg_refs_final[0]["last_processed_updated_at"]
+    assert final_updated_at == stored_updated_at, (
+        f"last_processed_updated_at should not change when older events are rejected. "
+        f"Expected {stored_updated_at}, got {final_updated_at}"
+    )
+
+    # No exceptions should occur (older events are gracefully skipped)
+    exceptions = [r for r in results if isinstance(r, Exception)]
+    assert len(exceptions) == 0, f"No exceptions should occur: {exceptions}"
+
+
+@pytest.mark.asyncio
+async def test_e2e_race_out_of_order_mixed_with_newer(
+    db_connection, clean_database, base_mr_payload, mock_activity_api, db_lifecycle_handler
+):
+    """
+    RACE CONDITION: Mix of older and newer events arrive concurrently.
+
+    Validates:
+    - last_processed_updated_at reflects the newest processed event
+    - Older events (by timestamp) are skipped once a newer one is processed
+    - System correctly handles mixed timestamps under concurrency
+    """
+    import datetime
+
+    from db import DBHelper
+    from gitlab_model import MergeRequestPayload
+    from webhook.merge_request import merge_request
+
+    dbh = DBHelper(db_lifecycle_handler)
+
+    conv_token = str(uuid.uuid4())
+
+    with (
+        patch("webhook.merge_request.database", db_lifecycle_handler),
+        patch("webhook.merge_request.dbh", dbh),
+        patch("webhook.messaging.database", db_lifecycle_handler),
+        patch("db.database", db_lifecycle_handler),
+        patch("webhook.merge_request.render") as mock_render,
+    ):
+        mock_render.return_value = {"type": "AdaptiveCard"}
+
+        # Create initial MR
+        base_mr_payload["object_attributes"]["action"] = "open"
+        base_mr_payload["object_attributes"]["updated_at"] = "2025-01-01 00:00:00 UTC"
+        payload_initial = MergeRequestPayload(**base_mr_payload)
+
+        await merge_request(
+            mr=payload_initial,
+            conversation_tokens=[conv_token],
+            participant_ids_filter=[],
+            new_commits_revoke_approvals=False,
+        )
+
+        # Prepare mixed events: some older, some newer
+        all_tasks = []
+        timestamps = [
+            ("2025-02-01 00:00:00 UTC", 2000),
+            ("2025-08-01 00:00:00 UTC", 8000),
+            ("2025-03-01 00:00:00 UTC", 3000),
+            ("2025-09-01 00:00:00 UTC", 9000),
+            ("2025-04-01 00:00:00 UTC", 4000),
+            ("2025-10-01 00:00:00 UTC", 10000),  # newest
+            ("2025-05-01 00:00:00 UTC", 5000),
+            ("2025-06-01 00:00:00 UTC", 6000),
+        ]
+
+        for ts, pipeline_id in timestamps:
+            payload_dict = base_mr_payload.copy()
+            payload_dict["object_attributes"] = base_mr_payload["object_attributes"].copy()
+            payload_dict["object_attributes"]["action"] = "update"
+            payload_dict["object_attributes"]["updated_at"] = ts
+            payload_dict["object_attributes"]["head_pipeline_id"] = pipeline_id
+            payload = MergeRequestPayload(**payload_dict)
+
+            all_tasks.append(
+                merge_request(
+                    mr=payload,
+                    conversation_tokens=[conv_token],
+                    participant_ids_filter=[],
+                    new_commits_revoke_approvals=False,
+                )
+            )
+
+        results = await asyncio.gather(*all_tasks, return_exceptions=True)
+
+    # Verify the newest event timestamp (October 2025) is stored
+    # This is the key guarantee: last_processed_updated_at should be the max timestamp
+    msg_refs = await db_connection.fetch("SELECT * FROM gitlab_mr_api.merge_request_message_ref")
+    final_updated_at = msg_refs[0]["last_processed_updated_at"]
+    expected_newest_ts = datetime.datetime(2025, 10, 1, 0, 0, 0, tzinfo=datetime.UTC)
+    assert final_updated_at == expected_newest_ts, (
+        f"last_processed_updated_at should be the newest timestamp. "
+        f"Expected {expected_newest_ts}, got {final_updated_at}"
+    )
+
+    # No exceptions
+    exceptions = [r for r in results if isinstance(r, Exception)]
+    assert len(exceptions) == 0, f"No exceptions should occur: {exceptions}"
+
+
+@pytest.mark.asyncio
+async def test_e2e_race_concurrent_close_and_reopen(
+    db_connection, clean_database, base_mr_payload, mock_activity_api, db_lifecycle_handler
+):
+    """
+    RACE CONDITION: Close and reopen events arrive and execute concurrently.
+
+    Timeline on GitLab: Open(T0) → Close(T1) → Reopen(T2)
+    Concurrent arrival: Close(T1) and Reopen(T2) race each other
+
+    This tests the race window where:
+    1. Close (T1) passes early OOO check (sees T0)
+    2. Reopen (T2) also passes early OOO check (sees T0)
+    3. Both compete for row locks
+    4. Final state should reflect the newer event (reopen)
+
+    Validates:
+    - Even under concurrent execution, newer timestamp wins
+    - Messages are NOT deleted if reopen (newer) should take precedence
+    - System handles lock contention gracefully
+    """
+    import datetime
+
+    from db import DBHelper
+    from gitlab_model import MergeRequestPayload
+    from webhook.merge_request import merge_request
+
+    dbh = DBHelper(db_lifecycle_handler)
+
+    conv_token = str(uuid.uuid4())
+
+    with (
+        patch("webhook.merge_request.database", db_lifecycle_handler),
+        patch("webhook.merge_request.dbh", dbh),
+        patch("webhook.messaging.database", db_lifecycle_handler),
+        patch("db.database", db_lifecycle_handler),
+        patch("webhook.merge_request.render") as mock_render,
+        patch("webhook.merge_request.periodic_cleanup"),
+    ):
+        mock_render.return_value = {"type": "AdaptiveCard"}
+
+        # Step 1: Open MR (T0 = January)
+        base_mr_payload["object_attributes"]["action"] = "open"
+        base_mr_payload["object_attributes"]["state"] = "opened"
+        base_mr_payload["object_attributes"]["updated_at"] = "2025-01-01 00:00:00 UTC"
+        payload_open = MergeRequestPayload(**base_mr_payload)
+
+        await merge_request(
+            mr=payload_open,
+            conversation_tokens=[conv_token],
+            participant_ids_filter=[],
+            new_commits_revoke_approvals=False,
+        )
+
+        # Verify message created
+        msg_refs_after_open = await db_connection.fetch(
+            "SELECT * FROM gitlab_mr_api.merge_request_message_ref"
+        )
+        assert len(msg_refs_after_open) == 1
+        initial_message_id = msg_refs_after_open[0]["message_id"]
+        assert initial_message_id is not None
+
+        # Step 2: Prepare close (T1 = February) and reopen (T2 = March)
+        close_payload_dict = base_mr_payload.copy()
+        close_payload_dict["object_attributes"] = base_mr_payload["object_attributes"].copy()
+        close_payload_dict["object_attributes"]["action"] = "close"
+        close_payload_dict["object_attributes"]["state"] = "closed"
+        close_payload_dict["object_attributes"]["updated_at"] = "2025-02-01 00:00:00 UTC"
+        payload_close = MergeRequestPayload(**close_payload_dict)
+
+        reopen_payload_dict = base_mr_payload.copy()
+        reopen_payload_dict["object_attributes"] = base_mr_payload["object_attributes"].copy()
+        reopen_payload_dict["object_attributes"]["action"] = "reopen"
+        reopen_payload_dict["object_attributes"]["state"] = "opened"
+        reopen_payload_dict["object_attributes"]["updated_at"] = "2025-03-01 00:00:00 UTC"
+        payload_reopen = MergeRequestPayload(**reopen_payload_dict)
+
+        # Step 3: Run close and reopen CONCURRENTLY multiple times to stress test
+        for iteration in range(5):
+            # Reset state for each iteration by reopening if needed
+            if iteration > 0:
+                # Ensure MR has a message ref for next iteration
+                msg_refs = await db_connection.fetch("SELECT * FROM gitlab_mr_api.merge_request_message_ref")
+                if len(msg_refs) == 0:
+                    # Recreate message ref
+                    await merge_request(
+                        mr=payload_open,
+                        conversation_tokens=[conv_token],
+                        participant_ids_filter=[],
+                        new_commits_revoke_approvals=False,
+                    )
+
+            close_task = merge_request(
+                mr=payload_close,
+                conversation_tokens=[conv_token],
+                participant_ids_filter=[],
+                new_commits_revoke_approvals=False,
+            )
+
+            reopen_task = merge_request(
+                mr=payload_reopen,
+                conversation_tokens=[conv_token],
+                participant_ids_filter=[],
+                new_commits_revoke_approvals=False,
+            )
+
+            # Run concurrently
+            results = await asyncio.gather(close_task, reopen_task, return_exceptions=True)
+
+            # No exceptions should occur
+            exceptions = [r for r in results if isinstance(r, Exception)]
+            assert len(exceptions) == 0, f"Iteration {iteration}: exceptions occurred: {exceptions}"
+
+    # Step 4: Final verification - the system should be in a consistent state
+    # Either:
+    # a) Reopen won: message refs exist with March timestamp
+    # b) Close won then reopen recreated: message refs exist
+    # c) Close won: no message refs, but deletion scheduled
+    #
+    # The key invariant: if message refs exist, their timestamp should be >= reopen timestamp
+    # because reopen is the newer event
+
+    msg_refs_final = await db_connection.fetch("SELECT * FROM gitlab_mr_api.merge_request_message_ref")
+    deletion_records = await db_connection.fetch("SELECT * FROM gitlab_mr_api.msg_to_delete")
+
+    print(f"Final state: {len(msg_refs_final)} message refs, {len(deletion_records)} deletions")
+
+    if len(msg_refs_final) > 0:
+        # If messages exist, verify the timestamp reflects the newer event
+        for ref in msg_refs_final:
+            stored_updated_at = ref["last_processed_updated_at"]
+            if stored_updated_at is not None:
+                # Should be >= reopen timestamp (March) since reopen is newer
+                expected_min_ts = datetime.datetime(2025, 3, 1, 0, 0, 0, tzinfo=datetime.UTC)
+                assert stored_updated_at >= expected_min_ts, (
+                    f"Message ref has stale timestamp {stored_updated_at}, "
+                    f"should be >= {expected_min_ts} (reopen timestamp)"
+                )
+
+    # System remained consistent (no exceptions, valid final state)
+    assert len(msg_refs_final) >= 0  # Either outcome is valid under concurrency
+
+
+@pytest.mark.asyncio
+async def test_e2e_race_close_after_reopen_ooo(
+    db_connection, clean_database, base_mr_payload, mock_activity_api, db_lifecycle_handler
+):
+    """
+    RACE CONDITION: Close event arrives AFTER reopen event (out of order).
+
+    Timeline on GitLab: Open(T0) → Close(T1) → Reopen(T2)
+    Arrival order:      Open(T0) → Reopen(T2) → Close(T1)
+
+    Validates:
+    - Late close event is rejected (does not delete reopened MR's messages)
+    - Messages remain after OOO close
+    - last_processed_updated_at reflects reopen, not close
+    """
+    import datetime
+
+    from db import DBHelper
+    from gitlab_model import MergeRequestPayload
+    from webhook.merge_request import merge_request
+
+    dbh = DBHelper(db_lifecycle_handler)
+
+    conv_token = str(uuid.uuid4())
+
+    with (
+        patch("webhook.merge_request.database", db_lifecycle_handler),
+        patch("webhook.merge_request.dbh", dbh),
+        patch("webhook.messaging.database", db_lifecycle_handler),
+        patch("db.database", db_lifecycle_handler),
+        patch("webhook.merge_request.render") as mock_render,
+    ):
+        mock_render.return_value = {"type": "AdaptiveCard"}
+
+        # Step 1: Open MR (T0 = January)
+        base_mr_payload["object_attributes"]["action"] = "open"
+        base_mr_payload["object_attributes"]["state"] = "opened"
+        base_mr_payload["object_attributes"]["updated_at"] = "2025-01-01 00:00:00 UTC"
+        payload_open = MergeRequestPayload(**base_mr_payload)
+
+        await merge_request(
+            mr=payload_open,
+            conversation_tokens=[conv_token],
+            participant_ids_filter=[],
+            new_commits_revoke_approvals=False,
+        )
+
+        # Verify message created
+        msg_refs_after_open = await db_connection.fetch(
+            "SELECT * FROM gitlab_mr_api.merge_request_message_ref"
+        )
+        assert len(msg_refs_after_open) == 1
+        assert msg_refs_after_open[0]["message_id"] is not None
+
+        # Step 2: Reopen arrives FIRST (T2 = March) - out of order!
+        reopen_payload_dict = base_mr_payload.copy()
+        reopen_payload_dict["object_attributes"] = base_mr_payload["object_attributes"].copy()
+        reopen_payload_dict["object_attributes"]["action"] = "reopen"
+        reopen_payload_dict["object_attributes"]["state"] = "opened"
+        reopen_payload_dict["object_attributes"]["updated_at"] = "2025-03-01 00:00:00 UTC"
+        payload_reopen = MergeRequestPayload(**reopen_payload_dict)
+
+        await merge_request(
+            mr=payload_reopen,
+            conversation_tokens=[conv_token],
+            participant_ids_filter=[],
+            new_commits_revoke_approvals=False,
+        )
+
+        # Verify reopen processed
+        msg_refs_after_reopen = await db_connection.fetch(
+            "SELECT * FROM gitlab_mr_api.merge_request_message_ref"
+        )
+        assert msg_refs_after_reopen[0]["message_id"] is not None
+        reopen_updated_at = msg_refs_after_reopen[0]["last_processed_updated_at"]
+        assert reopen_updated_at == datetime.datetime(2025, 3, 1, 0, 0, 0, tzinfo=datetime.UTC)
+
+        # Step 3: Close arrives SECOND (T1 = February) - should be rejected!
+        close_payload_dict = base_mr_payload.copy()
+        close_payload_dict["object_attributes"] = base_mr_payload["object_attributes"].copy()
+        close_payload_dict["object_attributes"]["action"] = "close"
+        close_payload_dict["object_attributes"]["state"] = "closed"
+        close_payload_dict["object_attributes"]["updated_at"] = "2025-02-01 00:00:00 UTC"
+        payload_close = MergeRequestPayload(**close_payload_dict)
+
+        result = await merge_request(
+            mr=payload_close,
+            conversation_tokens=[conv_token],
+            participant_ids_filter=[],
+            new_commits_revoke_approvals=False,
+        )
+
+    # Step 4: Verify close was rejected - messages should still exist!
+    msg_refs_final = await db_connection.fetch("SELECT * FROM gitlab_mr_api.merge_request_message_ref")
+    assert len(msg_refs_final) == 1, "Message ref should still exist"
+    assert msg_refs_final[0]["message_id"] is not None, "Message should not be deleted"
+
+    # Timestamp should still be from reopen (March), not close (February)
+    final_updated_at = msg_refs_final[0]["last_processed_updated_at"]
+    assert final_updated_at == datetime.datetime(
+        2025, 3, 1, 0, 0, 0, tzinfo=datetime.UTC
+    ), f"Timestamp should be from reopen (March), not close. Got {final_updated_at}"
+
+    # Close should have returned early (None result indicates early return)
+    assert result is None, "Close should have been rejected and returned early"

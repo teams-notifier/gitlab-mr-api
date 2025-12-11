@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 import datetime
 import uuid
+
 from typing import Any
 
 import asyncpg
 import fastapi_structured_logging
 import httpx
+
 from pydantic import BaseModel
 
 from config import config
-from db import database
 from db import MergeRequestInfos
+from db import database
+
 
 logger = fastapi_structured_logging.get_logger()
 
@@ -20,6 +23,7 @@ class MRMessRef(BaseModel):
     conversation_token: uuid.UUID
     message_id: uuid.UUID | None
     last_processed_fingerprint: str | None = None
+    last_processed_updated_at: datetime.datetime | None = None
 
 
 async def get_or_create_message_refs(
@@ -44,7 +48,8 @@ async def get_or_create_message_refs(
                     merge_request_message_ref_id,
                     conversation_token,
                     message_id,
-                    last_processed_fingerprint
+                    last_processed_fingerprint,
+                    last_processed_updated_at
                 FROM
                     merge_request_message_ref
                 WHERE
@@ -102,7 +107,8 @@ async def get_all_message_refs(merge_request_ref_id: int) -> list[MRMessRef]:
                     merge_request_message_ref_id,
                     conversation_token,
                     message_id,
-                    last_processed_fingerprint
+                    last_processed_fingerprint,
+                    last_processed_updated_at
                 FROM
                     merge_request_message_ref
                 WHERE
@@ -123,7 +129,6 @@ async def create_or_update_message(
     summary: str | None = None,
     update_only: bool = False,
 ) -> uuid.UUID | None:
-
     payload: dict[str, Any]
     if message_text:
         payload = {"text": message_text}
@@ -208,6 +213,7 @@ async def update_message_with_fingerprint(
     card: dict[str, Any],
     summary: str | None,
     payload_fingerprint: str,
+    payload_updated_at: datetime.datetime,
 ) -> None:
     """
     Update an existing message via Teams API and store the fingerprint.
@@ -238,19 +244,30 @@ async def update_message_with_fingerprint(
 
         connection: asyncpg.Connection
         async with await database.acquire() as connection:
-            await connection.execute(
+            # Conditional update: only if new timestamp is actually newer (handles races)
+            result = await connection.execute(
                 """UPDATE merge_request_message_ref
-                   SET last_processed_fingerprint = $1
-                   WHERE merge_request_message_ref_id = $2""",
+                   SET last_processed_fingerprint = $1, last_processed_updated_at = $2
+                   WHERE merge_request_message_ref_id = $3
+                     AND (last_processed_updated_at IS NULL OR last_processed_updated_at < $2)""",
                 payload_fingerprint,
+                payload_updated_at,
                 mrmsgref.merge_request_message_ref_id,
             )
 
-        logger.debug(
-            "updated message with fingerprint",
-            message_id=str(mrmsgref.message_id),
-            fingerprint=payload_fingerprint,
-        )
+        if result == "UPDATE 0":
+            logger.warning(
+                "message update skipped - newer timestamp already stored (race)",
+                message_id=str(mrmsgref.message_id),
+                payload_updated_at=payload_updated_at.isoformat(),
+            )
+        else:
+            logger.debug(
+                "updated message with fingerprint",
+                message_id=str(mrmsgref.message_id),
+                fingerprint=payload_fingerprint,
+                updated_at=payload_updated_at.isoformat(),
+            )
     except Exception:
         logger.error(
             "failed to update message",
@@ -268,6 +285,7 @@ async def update_all_messages_transactional(
     card: dict[str, Any],
     summary: str,
     payload_fingerprint: str,
+    payload_updated_at: datetime.datetime | None,
     action_name: str,
     schedule_deletion: bool = False,
     deletion_delay: datetime.timedelta | None = None,
@@ -294,7 +312,8 @@ async def update_all_messages_transactional(
         async with connection.transaction():
             locked_messages = await connection.fetch(
                 """SELECT merge_request_message_ref_id, conversation_token,
-                          message_id, last_processed_fingerprint
+                          message_id, last_processed_fingerprint,
+                          last_processed_updated_at
                     FROM merge_request_message_ref
                     WHERE merge_request_ref_id = $1
                     FOR UPDATE""",
@@ -313,14 +332,27 @@ async def update_all_messages_transactional(
                         message_id = row.get("message_id")
                         ref_id = row.get("merge_request_message_ref_id")
 
-                        if not schedule_deletion:
-                            if row.get("last_processed_fingerprint") == payload_fingerprint:
-                                logger.debug(
-                                    f"skipping {action_name} - fingerprint matches",
-                                    merge_request_message_ref_id=ref_id,
-                                    fingerprint=payload_fingerprint,
-                                )
-                                continue
+                        if not schedule_deletion and payload_updated_at is not None:
+                            stored_updated_at = row.get("last_processed_updated_at")
+                            if stored_updated_at is not None:
+                                if payload_updated_at < stored_updated_at:
+                                    logger.warning(
+                                        f"skipping {action_name} - out of order event",
+                                        merge_request_message_ref_id=ref_id,
+                                        payload_updated_at=payload_updated_at.isoformat(),
+                                        stored_updated_at=stored_updated_at.isoformat(),
+                                    )
+                                    continue
+                                if (
+                                    payload_updated_at == stored_updated_at
+                                    and row.get("last_processed_fingerprint") == payload_fingerprint
+                                ):
+                                    logger.debug(
+                                        f"skipping {action_name} - same timestamp and fingerprint",
+                                        merge_request_message_ref_id=ref_id,
+                                        fingerprint=payload_fingerprint,
+                                    )
+                                    continue
 
                         if message_id is not None:
                             try:
@@ -342,9 +374,10 @@ async def update_all_messages_transactional(
                                 if not schedule_deletion:
                                     await connection.execute(
                                         """UPDATE merge_request_message_ref
-                                           SET last_processed_fingerprint = $1
-                                           WHERE merge_request_message_ref_id = $2""",
+                                           SET last_processed_fingerprint = $1, last_processed_updated_at = $2
+                                           WHERE merge_request_message_ref_id = $3""",
                                         payload_fingerprint,
+                                        payload_updated_at,
                                         ref_id,
                                     )
 

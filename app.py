@@ -5,12 +5,14 @@ import os
 import sys
 import traceback
 import uuid
+
 from contextlib import asynccontextmanager
 from typing import Annotated
 
 import asyncpg
 import fastapi_structured_logging
 import httpx
+
 from fastapi import FastAPI
 from fastapi import Header
 from fastapi import HTTPException
@@ -20,12 +22,15 @@ from fastapi.responses import JSONResponse
 from fastapi.responses import RedirectResponse
 
 import webhook
+
 from config import DefaultConfig
 from db import database
 from gitlab_model import EmojiPayload
 from gitlab_model import MergeRequestPayload
 from gitlab_model import PipelinePayload
 from periodic_cleanup import periodic_cleanup
+from webhook.merge_request import PartialMessageUpdateError
+
 
 config = DefaultConfig()
 
@@ -163,7 +168,7 @@ async def handle_webhook(
                     raise HTTPException(
                         status_code=400,
                         detail="filter_on_participant_ids must be a list of comma separated integers",
-                    )
+                    ) from None
 
             await webhook.merge_request(
                 payload,
@@ -176,11 +181,22 @@ async def handle_webhook(
         if isinstance(payload, EmojiPayload):
             await webhook.emoji(payload, conversation_tokens)
         return {"status": "ok"}
+    except PartialMessageUpdateError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "error": "partial_message_update_failure",
+                "message": str(exc),
+                "failed": exc.failed,
+                "succeeded": exc.succeeded,
+                "total": exc.total,
+            },
+        ) from exc
     except httpx.HTTPStatusError as exc:
         raise HTTPException(
             status_code=exc.response.status_code,
             detail=exc.response.json(),
-        )
+        ) from exc
 
 
 @app.get("/healthz", include_in_schema=False)
@@ -197,7 +213,7 @@ async def healthcheck():
             error_detail=str(e),
             exc_info=True,
         )
-        raise HTTPException(status_code=500, detail=f"{type(e)}: {e}")
+        raise HTTPException(status_code=500, detail=f"{type(e)}: {e}") from e
 
 
 if __name__ == "__main__":

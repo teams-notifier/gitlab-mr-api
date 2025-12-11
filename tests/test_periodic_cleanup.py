@@ -7,9 +7,11 @@ Critical bug scenarios tested:
 2. No retry mechanism for failed deletions
 3. Network timeouts and rate limiting
 """
+
 import asyncio
 import datetime
 import uuid
+
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
@@ -37,8 +39,8 @@ async def test_activity_api_failure_leaves_record_in_database(mock_database, fre
 
     Location: periodic_cleanup.py:57-58
     """
-    from periodic_cleanup import _cleanup_task
     from config import DefaultConfig
+    from periodic_cleanup import _cleanup_task
 
     connection = mock_database.connection
 
@@ -68,7 +70,7 @@ async def test_activity_api_failure_leaves_record_in_database(mock_database, fre
         task = _cleanup_task(config, mock_database)
         try:
             await asyncio.wait_for(task, timeout=0.1)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
 
     assert client.request.call_count == 1
@@ -86,8 +88,8 @@ async def test_activity_api_network_timeout(mock_database, fresh_signal):
 
     Location: periodic_cleanup.py:43-58
     """
-    from periodic_cleanup import _cleanup_task
     from config import DefaultConfig
+    from periodic_cleanup import _cleanup_task
 
     connection = mock_database.connection
 
@@ -101,7 +103,7 @@ async def test_activity_api_network_timeout(mock_database, fresh_signal):
     connection.fetchval.return_value = None
 
     client = AsyncMock()
-    client.request.side_effect = asyncio.TimeoutError("Connection timeout")
+    client.request.side_effect = TimeoutError("Connection timeout")
 
     config = DefaultConfig()
 
@@ -112,7 +114,7 @@ async def test_activity_api_network_timeout(mock_database, fresh_signal):
         task = _cleanup_task(config, mock_database)
         try:
             await asyncio.wait_for(task, timeout=0.1)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
 
     assert client.request.call_count == 1
@@ -130,8 +132,8 @@ async def test_activity_api_rate_limiting(mock_database, fresh_signal):
 
     Location: periodic_cleanup.py:50-51
     """
-    from periodic_cleanup import _cleanup_task
     from config import DefaultConfig
+    from periodic_cleanup import _cleanup_task
 
     connection = mock_database.connection
 
@@ -161,7 +163,7 @@ async def test_activity_api_rate_limiting(mock_database, fresh_signal):
         task = _cleanup_task(config, mock_database)
         try:
             await asyncio.wait_for(task, timeout=0.1)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
 
     assert client.request.call_count == 1
@@ -178,8 +180,8 @@ async def test_successful_deletion_with_410_gone(mock_database, fresh_signal):
 
     Location: periodic_cleanup.py:50
     """
-    from periodic_cleanup import _cleanup_task
     from config import DefaultConfig
+    from periodic_cleanup import _cleanup_task
 
     connection = mock_database.connection
 
@@ -206,7 +208,7 @@ async def test_successful_deletion_with_410_gone(mock_database, fresh_signal):
         task = _cleanup_task(config, mock_database)
         try:
             await asyncio.wait_for(task, timeout=0.1)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
 
     assert client.request.call_count == 1
@@ -226,8 +228,8 @@ async def test_successful_deletion_with_200_ok(mock_database, fresh_signal):
 
     Location: periodic_cleanup.py:50
     """
-    from periodic_cleanup import _cleanup_task
     from config import DefaultConfig
+    from periodic_cleanup import _cleanup_task
 
     connection = mock_database.connection
 
@@ -254,7 +256,7 @@ async def test_successful_deletion_with_200_ok(mock_database, fresh_signal):
         task = _cleanup_task(config, mock_database)
         try:
             await asyncio.wait_for(task, timeout=0.1)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
 
     assert client.request.call_count == 1
@@ -274,8 +276,8 @@ async def test_multiple_records_first_fails_second_succeeds(mock_database, fresh
 
     Location: periodic_cleanup.py:40-58
     """
-    from periodic_cleanup import _cleanup_task
     from config import DefaultConfig
+    from periodic_cleanup import _cleanup_task
 
     connection = mock_database.connection
 
@@ -310,7 +312,7 @@ async def test_multiple_records_first_fails_second_succeeds(mock_database, fresh
         task = _cleanup_task(config, mock_database)
         try:
             await asyncio.wait_for(task, timeout=0.1)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
 
     assert client.request.call_count == 2
@@ -328,8 +330,8 @@ async def test_db_delete_fails_after_api_success(mock_database, fresh_signal):
 
     Location: periodic_cleanup.py:52-55
     """
-    from periodic_cleanup import _cleanup_task
     from config import DefaultConfig
+    from periodic_cleanup import _cleanup_task
 
     connection = mock_database.connection
 
@@ -357,7 +359,7 @@ async def test_db_delete_fails_after_api_success(mock_database, fresh_signal):
         task = _cleanup_task(config, mock_database)
         try:
             await asyncio.wait_for(task, timeout=0.1)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
 
     assert client.request.call_count == 1
@@ -397,8 +399,8 @@ async def test_wait_time_calculation_with_future_expiry(mock_database, fresh_sig
 
     Location: periodic_cleanup.py:59-61
     """
-    from periodic_cleanup import _cleanup_task
     from config import DefaultConfig
+    from periodic_cleanup import _cleanup_task
 
     connection = mock_database.connection
 
@@ -418,7 +420,7 @@ async def test_wait_time_calculation_with_future_expiry(mock_database, fresh_sig
         task = _cleanup_task(config, mock_database)
         try:
             await asyncio.wait_for(task, timeout=0.1)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
 
     assert connection.fetchval.call_count == 1
