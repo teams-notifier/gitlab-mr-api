@@ -39,12 +39,9 @@ async def merge_request(
     new_commits_revoke_approvals: bool,
 ):
     payload_fingerprint = hashlib.sha256(mr.model_dump_json().encode("utf8")).hexdigest()
-    if mr.object_attributes.updated_at:
-        payload_updated_at = datetime.datetime.fromisoformat(
-            mr.object_attributes.updated_at.replace(" UTC", "+00:00")
-        )
-    else:
-        payload_updated_at = datetime.datetime.now(datetime.UTC)
+    payload_updated_at = datetime.datetime.fromisoformat(
+        mr.object_attributes.updated_at.replace(" UTC", "+00:00")
+    )
     logger.info(
         "processing merge_request hook",
         project_id=mr.object_attributes.target_project_id,

@@ -648,41 +648,6 @@ class TestRaceConditions:
             ]
             assert len(debug_calls) == 1
 
-    async def test_updated_at_fallback_to_now(self, sample_mr_payload, sample_mri, mock_database):
-        """Test fallback to datetime.now(UTC) when updated_at is missing."""
-        from webhook.merge_request import merge_request
-
-        sample_mr_payload.object_attributes.updated_at = None
-        mock_ref = make_mock_ref("token1", message_id=uuid.uuid4(), ref_id=123)
-
-        with (
-            patch("webhook.merge_request.dbh.get_or_create_merge_request_ref_id", return_value=1),
-            patch("webhook.merge_request.dbh.update_merge_request_ref_payload", return_value=sample_mri),
-            patch("webhook.merge_request.dbh.get_merge_request_ref_infos", return_value=sample_mri),
-            patch("webhook.merge_request.render", return_value={"card": "data"}),
-            patch("webhook.merge_request.database", mock_database),
-            patch("webhook.merge_request.get_or_create_message_refs") as mock_get_refs,
-            patch("webhook.merge_request.get_all_message_refs") as mock_get_all,
-            patch("webhook.merge_request.update_message_with_fingerprint") as mock_update,
-            patch("webhook.merge_request.datetime") as mock_datetime,
-            patch("httpx.AsyncClient"),
-        ):
-            mock_datetime.datetime.fromisoformat = datetime.datetime.fromisoformat
-            mock_datetime.datetime.now.return_value = datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC)
-            mock_datetime.timezone = datetime.timezone
-            mock_get_refs.return_value = {"token1": mock_ref}
-            mock_get_all.return_value = [mock_ref]
-
-            await merge_request(
-                mr=sample_mr_payload,
-                conversation_tokens=["token1"],
-                participant_ids_filter=[],
-                new_commits_revoke_approvals=False,
-            )
-
-            mock_datetime.datetime.now.assert_called_once_with(datetime.UTC)
-            mock_update.assert_called_once()
-
     async def test_message_ref_no_message_id_conv_token_not_in_webhook_skipped(
         self, sample_mr_payload, sample_mri, mock_database
     ):

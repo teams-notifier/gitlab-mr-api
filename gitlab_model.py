@@ -37,7 +37,7 @@ class GLMRAttributes(BaseModel, extra="allow"):
     state: str
     url: str
     action: str
-    updated_at: str | None
+    updated_at: str
     oldrev: str | None = None
 
     # https://docs.gitlab.com/ee/api/merge_requests.html#merge-status
