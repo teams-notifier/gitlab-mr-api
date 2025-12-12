@@ -5,10 +5,11 @@ import asyncpg
 import fastapi_structured_logging
 
 from cards.render import render
-from db import database
 from db import MergeRequestInfos
+from db import database
 from gitlab_model import PipelinePayload
 from webhook.messaging import update_all_messages_transactional
+
 
 logger = fastapi_structured_logging.get_logger()
 
@@ -18,7 +19,13 @@ async def pipeline(
     conversation_tokens: list[str],
 ) -> MergeRequestInfos | None:
     payload_fingerprint = hashlib.sha256(pipeline.model_dump_json().encode("utf8")).hexdigest()
-    logger.debug("pipeline payload fingerprint: %s", payload_fingerprint)
+    logger.info(
+        "processing pipeline hook",
+        project_id=pipeline.project.id,
+        pipeline_id=pipeline.object_attributes.id,
+        object_kind=pipeline.object_kind,
+        fingerprint=payload_fingerprint,
+    )
 
     connection: asyncpg.Connection
     async with await database.acquire() as connection:
@@ -45,6 +52,7 @@ async def pipeline(
                 card,
                 summary,
                 payload_fingerprint,
+                None,
                 "pipeline",
             )
             return mri

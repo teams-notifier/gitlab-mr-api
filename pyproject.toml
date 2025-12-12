@@ -6,8 +6,26 @@ requires-python = ">=3.12"
 license = "MIT"
 dynamic = ["version"]
 
-[tool.black]
+[tool.ruff]
 line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["webhook", "db", "gitlab_model", "cards", "config"]
+force-single-line = true
+lines-after-imports = 2
+lines-between-types = 1
 
 [tool.mypy]
 check_untyped_defs = true

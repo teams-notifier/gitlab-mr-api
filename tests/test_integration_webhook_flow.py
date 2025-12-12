@@ -4,12 +4,15 @@ Integration tests for complete webhook flow.
 
 Tests the full path: FastAPI endpoint → webhook handler → database → activity-API
 """
+
 import uuid
+
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
+
 from fastapi.testclient import TestClient
 
 from webhook.messaging import MRMessRef
@@ -38,7 +41,6 @@ def test_client():
         patch("app.periodic_cleanup"),
         patch("app.config.is_valid_token", return_value=True),
     ):
-
         mock_db.connect = AsyncMock()
         mock_db.disconnect = AsyncMock()
         mock_db.acquire = AsyncMock()
@@ -75,6 +77,7 @@ def merge_request_payload_dict():
             "email": "test@example.com",
         },
         "project": {
+            "id": 100,
             "web_url": "https://gitlab.example.com/test/project",
             "path_with_namespace": "test/project",
         },
@@ -82,8 +85,8 @@ def merge_request_payload_dict():
             "id": 1,
             "iid": 1,
             "title": "Test MR",
-            "created_at": "2025-01-01T00:00:00Z",
-            "updated_at": "2025-01-01T00:00:00Z",
+            "created_at": "2025-01-01 00:00:00 UTC",
+            "updated_at": "2025-01-01 00:00:00 UTC",
             "state": "opened",
             "url": "https://gitlab.example.com/test/project/-/merge_requests/1",
             "action": "open",
@@ -114,27 +117,28 @@ async def test_webhook_endpoint_merge_request_open(
         message_id=None,
     )
 
+    sample_mri = MagicMock(
+        merge_request_ref_id=1,
+        merge_request_payload=dict_to_mock(merge_request_payload_dict),
+        merge_request_extra_state=MagicMock(
+            opener=MagicMock(id=1),
+            approvers={},
+        ),
+    )
+
     with (
         patch("webhook.merge_request.database", mock_database),
         patch("webhook.messaging.database", mock_database),
-        patch("webhook.merge_request.dbh.get_merge_request_ref_infos") as mock_dbh,
+        patch("webhook.merge_request.dbh.get_or_create_merge_request_ref_id", return_value=1),
+        patch("webhook.merge_request.dbh.update_merge_request_ref_payload", return_value=sample_mri),
+        patch("webhook.merge_request.dbh.get_merge_request_ref_infos", return_value=sample_mri),
         patch("webhook.merge_request.render") as mock_render,
         patch("webhook.merge_request.get_or_create_message_refs") as mock_get_or_create,
         patch("webhook.merge_request.get_all_message_refs") as mock_get_all,
         patch("httpx.AsyncClient") as mock_client_class,
     ):
-
         connection = mock_database.connection
         connection.fetchrow.return_value = {"merge_request_message_ref_id": 1}
-
-        mock_dbh.return_value = MagicMock(
-            merge_request_ref_id=1,
-            merge_request_payload=dict_to_mock(merge_request_payload_dict),
-            merge_request_extra_state=MagicMock(
-                opener=MagicMock(id=1),
-                approvers={},
-            ),
-        )
 
         mock_render.return_value = {"type": "AdaptiveCard"}
         mock_get_or_create.return_value = {str(conv_token): msg_ref}
@@ -170,15 +174,25 @@ async def test_webhook_endpoint_merge_request_merge(
     merge_request_payload_dict["object_attributes"]["action"] = "merge"
     merge_request_payload_dict["object_attributes"]["state"] = "merged"
 
+    sample_mri = MagicMock(
+        merge_request_ref_id=1,
+        merge_request_payload=dict_to_mock(merge_request_payload_dict),
+        merge_request_extra_state=MagicMock(
+            opener=MagicMock(id=1),
+            approvers={},
+        ),
+    )
+
     with (
         patch("webhook.merge_request.database", mock_database),
         patch("webhook.messaging.database", mock_database),
-        patch("webhook.merge_request.dbh.get_merge_request_ref_infos") as mock_dbh,
+        patch("webhook.merge_request.dbh.get_or_create_merge_request_ref_id", return_value=1),
+        patch("webhook.merge_request.dbh.update_merge_request_ref_payload", return_value=sample_mri),
+        patch("webhook.merge_request.dbh.get_merge_request_ref_infos", return_value=sample_mri),
         patch("webhook.merge_request.render") as mock_render,
         patch("webhook.merge_request.periodic_cleanup") as mock_cleanup,
         patch("httpx.AsyncClient") as mock_client_class,
     ):
-
         connection = mock_database.connection
 
         message_id = uuid.uuid4()
@@ -188,15 +202,6 @@ async def test_webhook_endpoint_merge_request_merge(
                 "message_id": message_id,
             }
         ]
-
-        mock_dbh.return_value = AsyncMock(
-            merge_request_ref_id=1,
-            merge_request_payload=dict_to_mock(merge_request_payload_dict),
-            merge_request_extra_state=AsyncMock(
-                opener=AsyncMock(id=1),
-                approvers={},
-            ),
-        )
 
         mock_render.return_value = {"type": "AdaptiveCard"}
 
@@ -257,21 +262,23 @@ async def test_webhook_endpoint_invalid_conversation_token(
     invalid_headers = valid_headers.copy()
     invalid_headers["X-Conversation-Token"] = "not-a-uuid"
 
+    sample_mri = MagicMock(
+        merge_request_ref_id=1,
+        merge_request_payload=dict_to_mock(merge_request_payload_dict),
+        merge_request_extra_state=MagicMock(
+            opener=MagicMock(id=1),
+            approvers={},
+        ),
+    )
+
     with (
         patch("webhook.merge_request.database", mock_database),
         patch("webhook.messaging.database", mock_database),
-        patch("webhook.merge_request.dbh.get_merge_request_ref_infos") as mock_dbh,
+        patch("webhook.merge_request.dbh.get_or_create_merge_request_ref_id", return_value=1),
+        patch("webhook.merge_request.dbh.update_merge_request_ref_payload", return_value=sample_mri),
+        patch("webhook.merge_request.dbh.get_merge_request_ref_infos", return_value=sample_mri),
         patch("webhook.merge_request.render", return_value={"type": "AdaptiveCard"}),
     ):
-        mock_dbh.return_value = MagicMock(
-            merge_request_ref_id=1,
-            merge_request_payload=dict_to_mock(merge_request_payload_dict),
-            merge_request_extra_state=MagicMock(
-                opener=MagicMock(id=1),
-                approvers={},
-            ),
-        )
-
         response = test_client.post(
             "/api/v1/gitlab-webhook",
             json=merge_request_payload_dict,
@@ -303,27 +310,28 @@ async def test_webhook_endpoint_multiple_conversation_tokens(
         for i, token in enumerate(conv_tokens)
     ]
 
+    sample_mri = MagicMock(
+        merge_request_ref_id=1,
+        merge_request_payload=dict_to_mock(merge_request_payload_dict),
+        merge_request_extra_state=MagicMock(
+            opener=MagicMock(id=1),
+            approvers={},
+        ),
+    )
+
     with (
         patch("webhook.merge_request.database", mock_database),
         patch("webhook.messaging.database", mock_database),
-        patch("webhook.merge_request.dbh.get_merge_request_ref_infos") as mock_dbh,
+        patch("webhook.merge_request.dbh.get_or_create_merge_request_ref_id", return_value=1),
+        patch("webhook.merge_request.dbh.update_merge_request_ref_payload", return_value=sample_mri),
+        patch("webhook.merge_request.dbh.get_merge_request_ref_infos", return_value=sample_mri),
         patch("webhook.merge_request.render") as mock_render,
         patch("webhook.merge_request.get_or_create_message_refs") as mock_get_refs,
         patch("webhook.merge_request.get_all_message_refs") as mock_get_all,
         patch("webhook.merge_request.create_or_update_message") as mock_create,
     ):
-
-        mock_dbh.return_value = MagicMock(
-            merge_request_ref_id=1,
-            merge_request_payload=dict_to_mock(merge_request_payload_dict),
-            merge_request_extra_state=MagicMock(
-                opener=MagicMock(id=1),
-                approvers={},
-            ),
-        )
-
         mock_render.return_value = {"type": "AdaptiveCard"}
-        mock_get_refs.return_value = {token: ref for token, ref in zip(conv_tokens, mock_refs)}
+        mock_get_refs.return_value = dict(zip(conv_tokens, mock_refs, strict=False))
         mock_get_all.return_value = mock_refs
         mock_create.return_value = uuid.uuid4()
 
@@ -341,7 +349,7 @@ async def test_webhook_endpoint_multiple_conversation_tokens(
 async def test_webhook_endpoint_activity_api_error(
     test_client, valid_headers, merge_request_payload_dict, mock_database
 ):
-    """Test webhook when activity-API returns error."""
+    """Test webhook when activity-API returns error - now returns 502 for partial failure."""
     import httpx
 
     conv_token = valid_headers["X-Conversation-Token"]
@@ -351,25 +359,26 @@ async def test_webhook_endpoint_activity_api_error(
         message_id=None,
     )
 
+    sample_mri = MagicMock(
+        merge_request_ref_id=1,
+        merge_request_payload=dict_to_mock(merge_request_payload_dict),
+        merge_request_extra_state=MagicMock(
+            opener=MagicMock(id=1),
+            approvers={},
+        ),
+    )
+
     with (
         patch("webhook.merge_request.database", mock_database),
         patch("webhook.messaging.database", mock_database),
-        patch("webhook.merge_request.dbh.get_merge_request_ref_infos") as mock_dbh,
+        patch("webhook.merge_request.dbh.get_or_create_merge_request_ref_id", return_value=1),
+        patch("webhook.merge_request.dbh.update_merge_request_ref_payload", return_value=sample_mri),
+        patch("webhook.merge_request.dbh.get_merge_request_ref_infos", return_value=sample_mri),
         patch("webhook.merge_request.render") as mock_render,
         patch("webhook.merge_request.get_or_create_message_refs") as mock_get_refs,
         patch("webhook.merge_request.get_all_message_refs") as mock_get_all,
         patch("webhook.merge_request.create_or_update_message") as mock_create,
     ):
-
-        mock_dbh.return_value = MagicMock(
-            merge_request_ref_id=1,
-            merge_request_payload=dict_to_mock(merge_request_payload_dict),
-            merge_request_extra_state=MagicMock(
-                opener=MagicMock(id=1),
-                approvers={},
-            ),
-        )
-
         mock_render.return_value = {"type": "AdaptiveCard"}
         mock_get_refs.return_value = {conv_token: mock_ref}
         mock_get_all.return_value = [mock_ref]
@@ -386,8 +395,9 @@ async def test_webhook_endpoint_activity_api_error(
             headers=valid_headers,
         )
 
-        assert response.status_code == 500
-        assert response.json() == {"detail": {"error": "Internal server error"}}
+        assert response.status_code == 502
+        assert response.json()["detail"]["error"] == "partial_message_update_failure"
+        assert response.json()["detail"]["failed"] == 1
 
 
 @pytest.mark.asyncio

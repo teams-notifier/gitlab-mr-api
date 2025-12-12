@@ -6,7 +6,9 @@ These tests verify that protection mechanisms exist (locks, cleanup logic),
 but don't test actual concurrent execution. See test_e2e_race_conditions.py
 for real concurrency tests with a database.
 """
+
 import uuid
+
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
@@ -35,23 +37,24 @@ async def test_merge_creates_single_deletion_record(mock_database, sample_merge_
         message_id=message_id,
     )
 
+    sample_mri = AsyncMock(
+        merge_request_ref_id=100,
+        merge_request_payload=sample_merge_request_payload,
+        merge_request_extra_state=AsyncMock(opener=sample_merge_request_payload.user),
+    )
+
     with (
         patch("webhook.merge_request.database", mock_database),
         patch("webhook.messaging.database", mock_database),
-        patch("webhook.merge_request.dbh.get_merge_request_ref_infos") as mock_dbh,
+        patch("webhook.merge_request.dbh.get_or_create_merge_request_ref_id", return_value=1),
+        patch("webhook.merge_request.dbh.update_merge_request_ref_payload", return_value=sample_mri),
+        patch("webhook.merge_request.dbh.get_merge_request_ref_infos", return_value=sample_mri),
         patch("webhook.merge_request.render") as mock_render,
         patch("webhook.merge_request.get_or_create_message_refs") as mock_get_or_create,
         patch("webhook.merge_request.get_all_message_refs") as mock_get_all,
         patch("httpx.AsyncClient") as mock_client_class,
     ):
-
         from webhook.merge_request import merge_request
-
-        mock_dbh.return_value = AsyncMock(
-            merge_request_ref_id=100,
-            merge_request_payload=sample_merge_request_payload,
-            merge_request_extra_state=AsyncMock(opener=sample_merge_request_payload.user),
-        )
 
         mock_render.return_value = {"type": "AdaptiveCard"}
         mock_get_or_create.return_value = {str(conv_token): msg_ref}
@@ -210,26 +213,27 @@ async def test_draft_transition_uses_for_update_lock(mock_database, sample_merge
         message_id=message_id,
     )
 
+    sample_mri = AsyncMock(
+        merge_request_ref_id=100,
+        merge_request_payload=sample_merge_request_payload,
+        merge_request_extra_state=AsyncMock(
+            opener=sample_merge_request_payload.user,
+            approvers={},
+        ),
+    )
+
     with (
         patch("webhook.merge_request.database", mock_database),
         patch("webhook.messaging.database", mock_database),
-        patch("webhook.merge_request.dbh.get_merge_request_ref_infos") as mock_dbh,
+        patch("webhook.merge_request.dbh.get_or_create_merge_request_ref_id", return_value=1),
+        patch("webhook.merge_request.dbh.update_merge_request_ref_payload", return_value=sample_mri),
+        patch("webhook.merge_request.dbh.get_merge_request_ref_infos", return_value=sample_mri),
         patch("webhook.merge_request.render") as mock_render,
         patch("webhook.merge_request.get_or_create_message_refs") as mock_get_or_create,
         patch("webhook.merge_request.get_all_message_refs") as mock_get_all,
         patch("httpx.AsyncClient") as mock_client_class,
     ):
-
         from webhook.merge_request import merge_request
-
-        mock_dbh.return_value = AsyncMock(
-            merge_request_ref_id=100,
-            merge_request_payload=sample_merge_request_payload,
-            merge_request_extra_state=AsyncMock(
-                opener=sample_merge_request_payload.user,
-                approvers={},
-            ),
-        )
 
         mock_render.return_value = {"type": "AdaptiveCard"}
         mock_get_or_create.return_value = {str(conv_token): msg_ref}
@@ -276,26 +280,27 @@ async def test_approval_updates_extra_state(mock_database, sample_merge_request_
         message_id=message_id,
     )
 
+    sample_mri = AsyncMock(
+        merge_request_ref_id=100,
+        merge_request_payload=sample_merge_request_payload,
+        merge_request_extra_state=AsyncMock(
+            opener=sample_merge_request_payload.user,
+            approvers={"1": {"id": 1, "username": "user1", "status": "approved"}},
+        ),
+    )
+
     with (
         patch("webhook.merge_request.database", mock_database),
         patch("webhook.messaging.database", mock_database),
-        patch("webhook.merge_request.dbh.get_merge_request_ref_infos") as mock_dbh,
+        patch("webhook.merge_request.dbh.get_or_create_merge_request_ref_id", return_value=1),
+        patch("webhook.merge_request.dbh.update_merge_request_ref_payload", return_value=sample_mri),
+        patch("webhook.merge_request.dbh.get_merge_request_ref_infos", return_value=sample_mri),
         patch("webhook.merge_request.render") as mock_render,
         patch("webhook.merge_request.get_or_create_message_refs") as mock_get_or_create,
         patch("webhook.merge_request.get_all_message_refs") as mock_get_all,
         patch("httpx.AsyncClient") as mock_client_class,
     ):
-
         from webhook.merge_request import merge_request
-
-        mock_dbh.return_value = AsyncMock(
-            merge_request_ref_id=100,
-            merge_request_payload=sample_merge_request_payload,
-            merge_request_extra_state=AsyncMock(
-                opener=sample_merge_request_payload.user,
-                approvers={"1": {"id": 1, "username": "user1", "status": "approved"}},
-            ),
-        )
 
         mock_render.return_value = {"type": "AdaptiveCard"}
         mock_get_or_create.return_value = {str(conv_token): msg_ref}

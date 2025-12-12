@@ -3,6 +3,7 @@ import os
 
 import dotenv
 
+
 dotenv.load_dotenv()
 
 __all__ = ["DefaultConfig", "config"]
@@ -20,7 +21,7 @@ class DefaultConfig:
     _valid_tokens: list[str]
 
     def __init__(self):
-        self._valid_tokens = list([t.strip() for t in self.VALID_X_GITLAB_TOKEN.lower().split(",")])
+        self._valid_tokens = [t.strip() for t in self.VALID_X_GITLAB_TOKEN.lower().split(",")]
         self.log_queries = False
         if len(self.LOG_QUERIES) and self.LOG_QUERIES[0].lower() in ("y", "t", "1"):
             self.log_queries = True

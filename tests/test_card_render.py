@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Tests for cards/render.py - YAML template rendering."""
+
 from cards.render import render
 from cards.render import yaml_escape_sq
 from db import GitlabUser
@@ -36,6 +37,7 @@ def make_mri(
             email="test@example.com",
         ),
         project=GLProject(
+            id=1,
             path_with_namespace="test/project",
             web_url="https://gitlab.example.com/test/project",
         ),
@@ -43,12 +45,12 @@ def make_mri(
             id=123,
             iid=1,
             title=title,
-            created_at="2025-01-01T00:00:00Z",
+            created_at="2025-01-01 00:00:00 UTC",
             draft=False,
             state="opened",
             url="https://gitlab.example.com/test/project/-/merge_requests/1",
             action="open",
-            updated_at="2025-01-01T00:00:00Z",
+            updated_at="2025-01-01 00:00:00 UTC",
             detailed_merge_status="mergeable",
             head_pipeline_id=None,
             work_in_progress=False,

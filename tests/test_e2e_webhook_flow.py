@@ -4,10 +4,13 @@ E2E tests for complete webhook flow with real database.
 
 Tests the full application flow: endpoint → handler → database → activity-API
 """
+
 import uuid
+
 from unittest.mock import patch
 
 import pytest
+
 
 pytestmark = pytest.mark.e2e
 
@@ -52,8 +55,8 @@ def mr_payload():
             "author_id": 1,
             "assignee_id": None,
             "title": "Test MR",
-            "created_at": "2025-01-01T00:00:00Z",
-            "updated_at": "2025-01-01T00:00:00Z",
+            "created_at": "2025-01-01 00:00:00 UTC",
+            "updated_at": "2025-01-01 00:00:00 UTC",
             "state": "opened",
             "merge_status": "can_be_merged",
             "detailed_merge_status": "not_open",
@@ -83,10 +86,11 @@ async def test_e2e_mr_open_creates_database_records(
     db_connection, clean_database, mr_payload, mock_activity_api, test_database_url
 ):
     """Test MR open creates GitLab instance, MR ref, and message ref."""
-    from db import DBHelper, DatabaseLifecycleHandler
     from config import DefaultConfig
-    from webhook.merge_request import merge_request
+    from db import DatabaseLifecycleHandler
+    from db import DBHelper
     from gitlab_model import MergeRequestPayload
+    from webhook.merge_request import merge_request
 
     config = DefaultConfig()
     config.DATABASE_URL = test_database_url
@@ -103,7 +107,6 @@ async def test_e2e_mr_open_creates_database_records(
         patch("db.database", db_lifecycle),
         patch("webhook.merge_request.render") as mock_render,
     ):
-
         mock_render.return_value = {"type": "AdaptiveCard"}
 
         conv_token = str(uuid.uuid4())
@@ -137,10 +140,11 @@ async def test_e2e_mr_merge_creates_deletion_record(
     db_connection, clean_database, mr_payload, mock_activity_api, test_database_url
 ):
     """Test MR merge creates deletion record in msg_to_delete."""
-    from db import DBHelper, DatabaseLifecycleHandler
     from config import DefaultConfig
-    from webhook.merge_request import merge_request
+    from db import DatabaseLifecycleHandler
+    from db import DBHelper
     from gitlab_model import MergeRequestPayload
+    from webhook.merge_request import merge_request
 
     config = DefaultConfig()
     config.DATABASE_URL = test_database_url
@@ -158,7 +162,6 @@ async def test_e2e_mr_merge_creates_deletion_record(
         patch("webhook.merge_request.render") as mock_render,
         patch("webhook.merge_request.periodic_cleanup"),
     ):
-
         mock_render.return_value = {"type": "AdaptiveCard"}
 
         conv_token = str(uuid.uuid4())
@@ -208,10 +211,11 @@ async def test_e2e_multiple_conversation_tokens(
     db_connection, clean_database, mr_payload, mock_activity_api, test_database_url
 ):
     """Test MR with multiple conversation tokens creates multiple message refs."""
-    from db import DBHelper, DatabaseLifecycleHandler
     from config import DefaultConfig
-    from webhook.merge_request import merge_request
+    from db import DatabaseLifecycleHandler
+    from db import DBHelper
     from gitlab_model import MergeRequestPayload
+    from webhook.merge_request import merge_request
 
     config = DefaultConfig()
     config.DATABASE_URL = test_database_url
@@ -228,7 +232,6 @@ async def test_e2e_multiple_conversation_tokens(
         patch("db.database", db_lifecycle),
         patch("webhook.merge_request.render") as mock_render,
     ):
-
         mock_render.return_value = {"type": "AdaptiveCard"}
 
         conv_tokens = [str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())]
@@ -256,10 +259,11 @@ async def test_e2e_approval_updates_extra_state(
     db_connection, clean_database, mr_payload, mock_activity_api, test_database_url
 ):
     """Test approval webhook updates merge_request_extra_state."""
-    from db import DBHelper, DatabaseLifecycleHandler
     from config import DefaultConfig
-    from webhook.merge_request import merge_request
+    from db import DatabaseLifecycleHandler
+    from db import DBHelper
     from gitlab_model import MergeRequestPayload
+    from webhook.merge_request import merge_request
 
     config = DefaultConfig()
     config.DATABASE_URL = test_database_url
@@ -276,7 +280,6 @@ async def test_e2e_approval_updates_extra_state(
         patch("db.database", db_lifecycle),
         patch("webhook.merge_request.render") as mock_render,
     ):
-
         mock_render.return_value = {"type": "AdaptiveCard"}
 
         conv_token = str(uuid.uuid4())
@@ -322,10 +325,11 @@ async def test_e2e_draft_to_ready_deletes_old_messages(
     db_connection, clean_database, mr_payload, mock_activity_api, test_database_url
 ):
     """Test draft-to-ready transition deletes old messages."""
-    from db import DBHelper, DatabaseLifecycleHandler
     from config import DefaultConfig
-    from webhook.merge_request import merge_request
+    from db import DatabaseLifecycleHandler
+    from db import DBHelper
     from gitlab_model import MergeRequestPayload
+    from webhook.merge_request import merge_request
 
     config = DefaultConfig()
     config.DATABASE_URL = test_database_url
@@ -343,7 +347,6 @@ async def test_e2e_draft_to_ready_deletes_old_messages(
         patch("webhook.merge_request.render") as mock_render,
         patch("webhook.merge_request.periodic_cleanup"),
     ):
-
         mock_render.return_value = {"type": "AdaptiveCard"}
 
         conv_token = str(uuid.uuid4())
@@ -397,10 +400,11 @@ async def test_e2e_idempotent_webhook_processing(
     db_connection, clean_database, mr_payload, mock_activity_api, test_database_url
 ):
     """Test processing same webhook multiple times is idempotent."""
-    from db import DBHelper, DatabaseLifecycleHandler
     from config import DefaultConfig
-    from webhook.merge_request import merge_request
+    from db import DatabaseLifecycleHandler
+    from db import DBHelper
     from gitlab_model import MergeRequestPayload
+    from webhook.merge_request import merge_request
 
     config = DefaultConfig()
     config.DATABASE_URL = test_database_url
@@ -417,7 +421,6 @@ async def test_e2e_idempotent_webhook_processing(
         patch("db.database", db_lifecycle),
         patch("webhook.merge_request.render") as mock_render,
     ):
-
         mock_render.return_value = {"type": "AdaptiveCard"}
 
         conv_token = str(uuid.uuid4())

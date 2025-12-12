@@ -2,18 +2,21 @@
 import asyncio
 import json
 import urllib.parse
+
 from typing import Any
 from typing import Literal
 
 import asyncpg.connect_utils
 import fastapi_structured_logging
+
 from pydantic import BaseModel
 
-from config import config
 from config import DefaultConfig
+from config import config
 from gitlab_model import GLEmojiAttributes
 from gitlab_model import MergeRequestPayload
 from gitlab_model import PipelinePayload
+
 
 log = fastapi_structured_logging.get_logger()
 
@@ -138,7 +141,77 @@ class DBHelper:
         assert isinstance(gli_id, int)
         return gli_id
 
+    async def get_or_create_merge_request_ref_id(self, merge_request: MergeRequestPayload) -> int:
+        """
+        Get or create an MR ref without updating payload.
+
+        Used for OOO check - we need the ID to query message refs,
+        but we don't want to corrupt the payload with stale data.
+        Only sets initial state on INSERT, never updates existing records.
+        """
+        gitlab_instance_id = await self.get_gitlab_instance_id_from_url(merge_request.object_attributes.url)
+
+        merge_ref_id = await self._generic_norm_upsert(
+            table="merge_request_ref",
+            identity_col="merge_request_ref_id",
+            select_attrs={
+                "gitlab_instance_id": gitlab_instance_id,
+                "gitlab_project_id": merge_request.object_attributes.target_project_id,
+                "gitlab_merge_request_iid": merge_request.object_attributes.iid,
+            },
+            insert_only_vals={
+                "gitlab_merge_request_id": merge_request.object_attributes.id,
+                "head_pipeline_id": merge_request.object_attributes.head_pipeline_id,
+                "merge_request_payload": merge_request.model_dump(),
+                "merge_request_extra_state": {
+                    "version": 1,
+                    "opener": {
+                        "id": merge_request.user.id,
+                        "name": merge_request.user.name,
+                        "username": merge_request.user.username,
+                    },
+                    "approvers": {},
+                    "pipeline_statuses": {},
+                    "emojis": {},
+                },
+            },
+        )
+        assert isinstance(merge_ref_id, int)
+        return merge_ref_id
+
+    async def update_merge_request_ref_payload(
+        self, merge_request_ref_id: int, merge_request: MergeRequestPayload
+    ) -> MergeRequestInfos:
+        """
+        Update MR ref payload after OOO check has passed.
+
+        Called only for non-OOO events to update the stored payload.
+        """
+        connection: asyncpg.Connection
+        async with await database.acquire() as connection:
+            row = await connection.fetchrow(
+                """UPDATE merge_request_ref
+                   SET gitlab_merge_request_id = $1,
+                       head_pipeline_id = $2,
+                       merge_request_payload = $3
+                   WHERE merge_request_ref_id = $4
+                   RETURNING merge_request_ref_id, merge_request_payload,
+                             merge_request_extra_state, head_pipeline_id""",
+                merge_request.object_attributes.id,
+                merge_request.object_attributes.head_pipeline_id,
+                merge_request.model_dump(),
+                merge_request_ref_id,
+            )
+            assert row is not None
+            return MergeRequestInfos(**row)
+
     async def get_merge_request_ref_infos(self, merge_request: MergeRequestPayload) -> MergeRequestInfos:
+        """
+        Get or create MR ref AND update payload (legacy behavior).
+
+        Note: This updates payload on every call. For OOO-safe behavior,
+        use get_or_create_merge_request_ref_id() + update_merge_request_ref_payload().
+        """
         gitlab_instance_id = await self.get_gitlab_instance_id_from_url(merge_request.object_attributes.url)
 
         merge_ref = await self._generic_norm_upsert(
@@ -212,7 +285,6 @@ class DBHelper:
         insert_only_vals: dict[str, Any] | None = None,
         extra_sel_cols: list[str] | None = None,
     ) -> Any:
-
         if extra_insert_and_update_vals is None:
             extra_insert_and_update_vals = {}
 

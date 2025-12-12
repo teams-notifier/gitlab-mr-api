@@ -23,6 +23,7 @@ class GLUser(BaseModel, extra="allow"):
 
 
 class GLProject(BaseModel, extra="allow"):
+    id: int
     path_with_namespace: str
     web_url: str
 
@@ -36,7 +37,7 @@ class GLMRAttributes(BaseModel, extra="allow"):
     state: str
     url: str
     action: str
-    updated_at: str | None
+    updated_at: str
     oldrev: str | None = None
 
     # https://docs.gitlab.com/ee/api/merge_requests.html#merge-status
@@ -80,6 +81,7 @@ class PipelinePayload(BaseModel, extra="allow"):
     object_kind: Literal["pipeline"]
     object_attributes: GLPipelineAttributes
     builds: list[GLPipelineBuild]
+    project: GLProject
 
 
 class GLEmojiAttributes(BaseModel, extra="allow"):

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import datetime
 import uuid
+
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
@@ -8,9 +9,9 @@ from unittest.mock import patch
 import httpx
 import pytest
 
+from webhook.messaging import MRMessRef
 from webhook.messaging import create_or_update_message
 from webhook.messaging import get_or_create_message_refs
-from webhook.messaging import MRMessRef
 from webhook.messaging import update_all_messages_transactional
 
 
@@ -265,6 +266,7 @@ class TestUpdateAllMessagesTransactional:
                 card,
                 summary,
                 fingerprint,
+                datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC),
                 "test-action",
             )
 
@@ -298,6 +300,7 @@ class TestUpdateAllMessagesTransactional:
                 card,
                 "summary",
                 fingerprint,
+                datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC),
                 "test-action",
             )
 
@@ -335,6 +338,7 @@ class TestUpdateAllMessagesTransactional:
                 {"body": []},
                 "summary",
                 fingerprint,
+                datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC),
                 "test-action",
             )
 
@@ -369,6 +373,7 @@ class TestUpdateAllMessagesTransactional:
                 {"body": []},
                 "summary",
                 "fingerprint",
+                datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC),
                 "test-action",
                 schedule_deletion=True,
                 deletion_delay=datetime.timedelta(seconds=300),
@@ -423,6 +428,7 @@ class TestUpdateAllMessagesTransactional:
                 {"body": []},
                 "summary",
                 "fingerprint",
+                datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC),
                 "test-action",
             )
 
@@ -495,6 +501,142 @@ class TestUpdateAllMessagesTransactional:
         )
 
         assert mock_http_client.request.call_count == 2
+
+
+class TestUpdateAllMessagesTransactionalOrdering:
+    """Tests for out-of-order and duplicate event handling in transactional updates."""
+
+    async def test_out_of_order_event_skipped_in_transactional(self, mock_database):
+        """Test that out-of-order events are skipped in transactional update."""
+        mock_db, mock_conn = mock_database
+        stored_time = datetime.datetime(2025, 6, 1, tzinfo=datetime.UTC)
+        payload_time = datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC)
+
+        mock_conn.fetch.return_value = [
+            {
+                "merge_request_message_ref_id": 1,
+                "conversation_token": uuid.uuid4(),
+                "message_id": uuid.uuid4(),
+                "last_processed_fingerprint": "old-fingerprint",
+                "last_processed_updated_at": stored_time,
+            }
+        ]
+
+        sample_mri = MagicMock()
+        sample_mri.merge_request_ref_id = 1
+
+        with (
+            patch("webhook.messaging.logger") as mock_logger,
+            patch("httpx.AsyncClient") as mock_client_class,
+        ):
+            mock_client_instance = MagicMock()
+            mock_client_ctx = MagicMock()
+            mock_client_ctx.__aenter__ = AsyncMock(return_value=mock_client_instance)
+            mock_client_ctx.__aexit__ = AsyncMock()
+            mock_client_class.return_value = mock_client_ctx
+
+            count = await update_all_messages_transactional(
+                sample_mri,
+                {"body": []},
+                "summary",
+                "fingerprint",
+                payload_time,
+                "test-action",
+            )
+
+            assert count == 0
+            warning_calls = [c for c in mock_logger.warning.call_args_list if "out of order" in str(c)]
+            assert len(warning_calls) == 1
+            mock_client_instance.request.assert_not_called()
+
+    async def test_duplicate_event_same_timestamp_fingerprint_skipped_in_transactional(self, mock_database):
+        """Test that duplicate events (same timestamp + fingerprint) are skipped."""
+        mock_db, mock_conn = mock_database
+        same_time = datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC)
+        same_fingerprint = "same-fingerprint"
+
+        mock_conn.fetch.return_value = [
+            {
+                "merge_request_message_ref_id": 1,
+                "conversation_token": uuid.uuid4(),
+                "message_id": uuid.uuid4(),
+                "last_processed_fingerprint": same_fingerprint,
+                "last_processed_updated_at": same_time,
+            }
+        ]
+
+        sample_mri = MagicMock()
+        sample_mri.merge_request_ref_id = 1
+
+        with (
+            patch("webhook.messaging.logger") as mock_logger,
+            patch("httpx.AsyncClient") as mock_client_class,
+        ):
+            mock_client_instance = MagicMock()
+            mock_client_ctx = MagicMock()
+            mock_client_ctx.__aenter__ = AsyncMock(return_value=mock_client_instance)
+            mock_client_ctx.__aexit__ = AsyncMock()
+            mock_client_class.return_value = mock_client_ctx
+
+            count = await update_all_messages_transactional(
+                sample_mri,
+                {"body": []},
+                "summary",
+                same_fingerprint,
+                same_time,
+                "test-action",
+            )
+
+            assert count == 0
+            debug_calls = [
+                c for c in mock_logger.debug.call_args_list if "same timestamp and fingerprint" in str(c)
+            ]
+            assert len(debug_calls) == 1
+            mock_client_instance.request.assert_not_called()
+
+    async def test_newer_event_processed_in_transactional(self, mock_database):
+        """Test that newer events are processed normally."""
+        mock_db, mock_conn = mock_database
+        stored_time = datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC)
+        payload_time = datetime.datetime(2025, 6, 1, tzinfo=datetime.UTC)
+
+        mock_conn.fetch.return_value = [
+            {
+                "merge_request_message_ref_id": 1,
+                "conversation_token": uuid.uuid4(),
+                "message_id": uuid.uuid4(),
+                "last_processed_fingerprint": "old-fingerprint",
+                "last_processed_updated_at": stored_time,
+            }
+        ]
+
+        sample_mri = MagicMock()
+        sample_mri.merge_request_ref_id = 1
+
+        with (
+            patch("webhook.messaging.logger"),
+            patch("httpx.AsyncClient") as mock_client_class,
+        ):
+            mock_client_instance = MagicMock()
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_client_instance.request = AsyncMock(return_value=mock_response)
+            mock_client_ctx = MagicMock()
+            mock_client_ctx.__aenter__ = AsyncMock(return_value=mock_client_instance)
+            mock_client_ctx.__aexit__ = AsyncMock()
+            mock_client_class.return_value = mock_client_ctx
+
+            count = await update_all_messages_transactional(
+                sample_mri,
+                {"body": []},
+                "summary",
+                "new-fingerprint",
+                payload_time,
+                "test-action",
+            )
+
+            assert count == 1
+            mock_client_instance.request.assert_called_once()
 
 
 class TestMRMessRef:

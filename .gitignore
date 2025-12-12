@@ -6,3 +6,4 @@ misc
 .coverage
 .pytest_cache
 *.pyc
+gitlab_mr_api.egg-info

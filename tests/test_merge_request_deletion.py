@@ -7,7 +7,9 @@ Critical bug scenarios tested:
 2. Partial failure in deletion sequence
 3. Race conditions during message deletion
 """
+
 import uuid
+
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
@@ -30,21 +32,24 @@ async def test_merge_close_uses_transactional_update(mock_database, sample_merge
     """
     merge_request_ref_id = 100
 
+    sample_mri = AsyncMock(
+        merge_request_ref_id=merge_request_ref_id,
+        merge_request_payload=sample_merge_request_payload,
+        merge_request_extra_state=AsyncMock(opener=sample_merge_request_payload.user),
+    )
+
     with (
         patch("webhook.merge_request.database", mock_database),
         patch("webhook.messaging.database", mock_database),
-        patch("webhook.merge_request.dbh.get_merge_request_ref_infos") as mock_dbh,
+        patch("webhook.merge_request.dbh.get_or_create_merge_request_ref_id", return_value=1),
+        patch("webhook.merge_request.dbh.update_merge_request_ref_payload", return_value=sample_mri),
+        patch("webhook.merge_request.dbh.get_merge_request_ref_infos", return_value=sample_mri),
         patch("webhook.merge_request.render"),
         patch("webhook.merge_request.update_all_messages_transactional") as mock_update,
         patch("webhook.merge_request.periodic_cleanup"),
     ):
         from webhook.merge_request import merge_request
 
-        mock_dbh.return_value = AsyncMock(
-            merge_request_ref_id=merge_request_ref_id,
-            merge_request_payload=sample_merge_request_payload,
-            merge_request_extra_state=AsyncMock(opener=sample_merge_request_payload.user),
-        )
         mock_update.return_value = 1
 
         await merge_request(
@@ -56,7 +61,7 @@ async def test_merge_close_uses_transactional_update(mock_database, sample_merge
 
     mock_update.assert_called_once()
     call_args = mock_update.call_args
-    assert call_args[0][4] == "close/merge"
+    assert call_args[0][5] == "close/merge"
     assert call_args[1]["schedule_deletion"] is True
 
 
@@ -73,21 +78,24 @@ async def test_merge_close_transactional_rollback_on_failure(mock_database, samp
     """
     merge_request_ref_id = 100
 
+    sample_mri = AsyncMock(
+        merge_request_ref_id=merge_request_ref_id,
+        merge_request_payload=sample_merge_request_payload,
+        merge_request_extra_state=AsyncMock(opener=sample_merge_request_payload.user),
+    )
+
     with (
         patch("webhook.merge_request.database", mock_database),
         patch("webhook.messaging.database", mock_database),
-        patch("webhook.merge_request.dbh.get_merge_request_ref_infos") as mock_dbh,
+        patch("webhook.merge_request.dbh.get_or_create_merge_request_ref_id", return_value=1),
+        patch("webhook.merge_request.dbh.update_merge_request_ref_payload", return_value=sample_mri),
+        patch("webhook.merge_request.dbh.get_merge_request_ref_infos", return_value=sample_mri),
         patch("webhook.merge_request.render"),
         patch("webhook.merge_request.update_all_messages_transactional") as mock_update,
         patch("webhook.merge_request.periodic_cleanup"),
     ):
         from webhook.merge_request import merge_request
 
-        mock_dbh.return_value = AsyncMock(
-            merge_request_ref_id=merge_request_ref_id,
-            merge_request_payload=sample_merge_request_payload,
-            merge_request_extra_state=AsyncMock(opener=sample_merge_request_payload.user),
-        )
         mock_update.side_effect = Exception("Database error during transaction")
 
         with pytest.raises(Exception, match="Database error during transaction"):
@@ -113,7 +121,9 @@ async def test_race_condition_duplicate_message_deletion_logs_failure(mock_datab
     Location: webhook/messaging.py:create_or_update_message
     """
     import httpx
-    from webhook.messaging import MRMessRef, create_or_update_message
+
+    from webhook.messaging import MRMessRef
+    from webhook.messaging import create_or_update_message
 
     connection = mock_database.connection
     connection.fetchrow.return_value = None
@@ -164,21 +174,24 @@ async def test_multiple_messages_all_deleted_transactionally(mock_database, samp
     """
     merge_request_ref_id = 100
 
+    sample_mri = AsyncMock(
+        merge_request_ref_id=merge_request_ref_id,
+        merge_request_payload=sample_merge_request_payload,
+        merge_request_extra_state=AsyncMock(opener=sample_merge_request_payload.user),
+    )
+
     with (
         patch("webhook.merge_request.database", mock_database),
         patch("webhook.messaging.database", mock_database),
-        patch("webhook.merge_request.dbh.get_merge_request_ref_infos") as mock_dbh,
+        patch("webhook.merge_request.dbh.get_or_create_merge_request_ref_id", return_value=1),
+        patch("webhook.merge_request.dbh.update_merge_request_ref_payload", return_value=sample_mri),
+        patch("webhook.merge_request.dbh.get_merge_request_ref_infos", return_value=sample_mri),
         patch("webhook.merge_request.render"),
         patch("webhook.merge_request.update_all_messages_transactional") as mock_update,
         patch("webhook.merge_request.periodic_cleanup"),
     ):
         from webhook.merge_request import merge_request
 
-        mock_dbh.return_value = AsyncMock(
-            merge_request_ref_id=merge_request_ref_id,
-            merge_request_payload=sample_merge_request_payload,
-            merge_request_extra_state=AsyncMock(opener=sample_merge_request_payload.user),
-        )
         mock_update.return_value = 3
 
         await merge_request(
@@ -215,10 +228,21 @@ async def test_draft_to_ready_uses_transaction(mock_database, sample_merge_reque
         message_id=uuid.uuid4(),
     )
 
+    sample_mri = AsyncMock(
+        merge_request_ref_id=100,
+        merge_request_payload=sample_merge_request_payload,
+        merge_request_extra_state=AsyncMock(
+            opener=sample_merge_request_payload.user,
+            approvers={},
+        ),
+    )
+
     with (
         patch("webhook.merge_request.database", mock_database),
         patch("webhook.messaging.database", mock_database),
-        patch("webhook.merge_request.dbh.get_merge_request_ref_infos") as mock_dbh,
+        patch("webhook.merge_request.dbh.get_or_create_merge_request_ref_id", return_value=1),
+        patch("webhook.merge_request.dbh.update_merge_request_ref_payload", return_value=sample_mri),
+        patch("webhook.merge_request.dbh.get_merge_request_ref_infos", return_value=sample_mri),
         patch("webhook.merge_request.render"),
         patch("webhook.merge_request.update_all_messages_transactional") as mock_update,
         patch("webhook.merge_request.periodic_cleanup"),
@@ -228,14 +252,6 @@ async def test_draft_to_ready_uses_transaction(mock_database, sample_merge_reque
     ):
         from webhook.merge_request import merge_request
 
-        mock_dbh.return_value = AsyncMock(
-            merge_request_ref_id=100,
-            merge_request_payload=sample_merge_request_payload,
-            merge_request_extra_state=AsyncMock(
-                opener=sample_merge_request_payload.user,
-                approvers={},
-            ),
-        )
         mock_update.return_value = 1
         mock_get_refs.return_value = {"conv-token-1": mock_ref}
         mock_get_all.return_value = [mock_ref]
@@ -263,21 +279,24 @@ async def test_merge_with_no_messages_doesnt_delete_mr_ref(mock_database, sample
     connection = mock_database.connection
     connection.fetch.return_value = []
 
+    sample_mri = AsyncMock(
+        merge_request_ref_id=100,
+        merge_request_payload=sample_merge_request_payload,
+        merge_request_extra_state=AsyncMock(opener=sample_merge_request_payload.user),
+    )
+
     with (
         patch("webhook.merge_request.database", mock_database),
         patch("webhook.messaging.database", mock_database),
-        patch("webhook.merge_request.dbh.get_merge_request_ref_infos") as mock_dbh,
+        patch("webhook.merge_request.dbh.get_or_create_merge_request_ref_id", return_value=1),
+        patch("webhook.merge_request.dbh.update_merge_request_ref_payload", return_value=sample_mri),
+        patch("webhook.merge_request.dbh.get_merge_request_ref_infos", return_value=sample_mri),
         patch("webhook.merge_request.render"),
         patch("webhook.merge_request.update_all_messages_transactional") as mock_update,
         patch("webhook.merge_request.periodic_cleanup"),
     ):
         from webhook.merge_request import merge_request
 
-        mock_dbh.return_value = AsyncMock(
-            merge_request_ref_id=100,
-            merge_request_payload=sample_merge_request_payload,
-            merge_request_extra_state=AsyncMock(opener=sample_merge_request_payload.user),
-        )
         mock_update.return_value = 0
 
         await merge_request(
