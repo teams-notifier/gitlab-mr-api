@@ -115,8 +115,8 @@ async def test_race_condition_duplicate_message_deletion_logs_failure(mock_datab
     POSITIVE TEST: Race condition handling gracefully logs DELETE failures.
 
     Scenario: Two webhooks create messages simultaneously, second one's DELETE fails
-    Result: DELETE failure is logged but doesn't crash the webhook
-    Impact: Graceful degradation - duplicate may persist in Teams but webhook succeeds
+    Result: DELETE failure is logged but doesn't crash; returns None to signal duplicate
+    Impact: Graceful degradation - duplicate may persist in Teams but caller knows not to use it
 
     Location: webhook/messaging.py:create_or_update_message
     """
@@ -156,7 +156,7 @@ async def test_race_condition_duplicate_message_deletion_logs_failure(mock_datab
             summary="Test",
         )
 
-    assert result == uuid.UUID(new_message_id)
+    assert result is None
     assert client.request.call_count == 2
     assert connection.fetchrow.call_count == 1
 

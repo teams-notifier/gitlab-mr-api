@@ -1011,3 +1011,119 @@ async def test_e2e_race_close_after_reopen_ooo(
 
     # Close should have returned early (None result indicates early return)
     assert result is None, "Close should have been rejected and returned early"
+
+
+@pytest.mark.asyncio
+async def test_e2e_race_update_arrives_before_open_with_older_timestamp(
+    db_connection, clean_database, base_mr_payload, mock_activity_api, db_lifecycle_handler
+):
+    """
+    RACE CONDITION: Update event arrives before open event, but has older timestamp.
+
+    Timeline on GitLab: MR created at T0
+    Concurrent arrival: Update(T0) and Open(T1) where T0 < T1
+
+    This tests a bug where:
+    1. Update(T0) arrives first, creates message M1
+    2. Open(T1) arrives second, also tries to create message
+    3. Open(T1) creates M2, conditional update fails (M1 exists)
+    4. Open(T1) deletes M2 from Teams
+    5. BUG: create_or_update_message() returned M2 (deleted)
+    6. BUG: Outer code overwrote message_id with M2 (newer timestamp)
+    7. Result: DB points to deleted M2, actual M1 orphaned
+
+    After fix:
+    - create_or_update_message() returns None when duplicate detected
+    - DB keeps M1, no orphaned messages
+
+    Validates:
+    - Duplicate message detection works correctly
+    - No orphaned Teams messages
+    - DB always points to valid message
+    """
+    import datetime
+
+    from db import DBHelper
+    from gitlab_model import MergeRequestPayload
+    from webhook.merge_request import merge_request
+
+    dbh = DBHelper(db_lifecycle_handler)
+
+    conv_token = str(uuid.uuid4())
+
+    with (
+        patch("webhook.merge_request.database", db_lifecycle_handler),
+        patch("webhook.merge_request.dbh", dbh),
+        patch("webhook.messaging.database", db_lifecycle_handler),
+        patch("db.database", db_lifecycle_handler),
+        patch("webhook.merge_request.render") as mock_render,
+    ):
+        mock_render.return_value = {"type": "AdaptiveCard"}
+
+        # Prepare "update" event with older timestamp (T0 = 09:07:19)
+        update_payload_dict = base_mr_payload.copy()
+        update_payload_dict["object_attributes"] = base_mr_payload["object_attributes"].copy()
+        update_payload_dict["object_attributes"]["action"] = "update"
+        update_payload_dict["object_attributes"]["updated_at"] = "2025-12-22 09:07:19 UTC"
+        update_payload_dict["object_attributes"]["created_at"] = "2025-12-22 09:07:19 UTC"
+        update_payload_dict["changes"] = {}
+        payload_update = MergeRequestPayload(**update_payload_dict)
+
+        # Prepare "open" event with newer timestamp (T1 = 09:07:23)
+        open_payload_dict = base_mr_payload.copy()
+        open_payload_dict["object_attributes"] = base_mr_payload["object_attributes"].copy()
+        open_payload_dict["object_attributes"]["action"] = "open"
+        open_payload_dict["object_attributes"]["updated_at"] = "2025-12-22 09:07:23 UTC"
+        open_payload_dict["object_attributes"]["created_at"] = "2025-12-22 09:07:19 UTC"
+        open_payload_dict["changes"] = {
+            "merge_status": {"previous": "preparing", "current": "checking"},
+            "updated_at": {"previous": "2025-12-22 09:07:19 UTC", "current": "2025-12-22 09:07:23 UTC"},
+        }
+        payload_open = MergeRequestPayload(**open_payload_dict)
+
+        # Run both concurrently - simulates the race condition
+        results = await asyncio.gather(
+            merge_request(
+                mr=payload_update,
+                conversation_tokens=[conv_token],
+                participant_ids_filter=[],
+                new_commits_revoke_approvals=False,
+            ),
+            merge_request(
+                mr=payload_open,
+                conversation_tokens=[conv_token],
+                participant_ids_filter=[],
+                new_commits_revoke_approvals=False,
+            ),
+            return_exceptions=True,
+        )
+
+    # Verify no exceptions
+    exceptions = [r for r in results if isinstance(r, Exception)]
+    assert len(exceptions) == 0, f"No exceptions should occur: {exceptions}"
+
+    # Verify exactly one message ref exists
+    msg_refs = await db_connection.fetch("SELECT * FROM gitlab_mr_api.merge_request_message_ref")
+    assert len(msg_refs) == 1, f"Should have exactly 1 message ref, got {len(msg_refs)}"
+
+    # Verify message_id is set (not None)
+    message_id = msg_refs[0]["message_id"]
+    assert message_id is not None, "Message ref should have a valid message_id"
+
+    # Count API requests: POST creates, DELETE removes duplicates
+    requests = mock_activity_api["requests"]
+    post_requests = [r for r in requests if r["method"] == "POST"]
+    delete_requests = [r for r in requests if r["method"] == "DELETE"]
+
+    # With the fix: if duplicate detected, message is deleted and create_or_update_message returns None
+    # So we should have at most 1 successful create (no orphaned messages)
+    # Under race: 1 or 2 POSTs depending on timing, but at most 1 DELETE
+    assert len(post_requests) >= 1, "At least one message should be created"
+    assert len(delete_requests) <= 1, "At most one duplicate should be deleted"
+
+    # Verify timestamp is from the newer event (Open with T1)
+    final_updated_at = msg_refs[0]["last_processed_updated_at"]
+    expected_ts = datetime.datetime(2025, 12, 22, 9, 7, 23, tzinfo=datetime.UTC)
+    assert (
+        final_updated_at == expected_ts
+    ), f"Timestamp should be from Open event (09:07:23). Got {final_updated_at}"
