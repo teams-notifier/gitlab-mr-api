@@ -174,6 +174,11 @@ async def create_or_update_message(
                 mrmsgref.merge_request_message_ref_id,
             )
         if result is None or len(result) == 0:
+            logger.warning(
+                "duplicate message detected - another request already set message_id",
+                merge_request_message_ref_id=mrmsgref.merge_request_message_ref_id,
+                duplicate_message_id=response.get("message_id"),
+            )
             try:
                 await client.request(
                     "DELETE",
@@ -184,6 +189,7 @@ async def create_or_update_message(
                 )
             except Exception:
                 logger.exception("Failed to delete duplicate message %s", response.get("message_id"))
+            return None
     else:
         payload["message_id"] = str(mrmsgref.message_id)
         try:
