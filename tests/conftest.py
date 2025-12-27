@@ -103,6 +103,30 @@ def mock_database():
     return MockDatabase()
 
 
+@pytest.fixture(autouse=True)
+def mock_discussion_stats():
+    """Auto-mock fetch_and_persist_discussion_stats and related db methods for all tests."""
+    from unittest.mock import patch
+
+    mock_fn = AsyncMock(return_value=None)
+    mock_any_needs_update = AsyncMock(return_value=True)
+    mock_upsert_pending = AsyncMock(return_value=True)
+    mock_delete_pending = AsyncMock(return_value=None)
+    mock_get_pending_refreshes = AsyncMock(return_value=[])
+    with (
+        patch("webhook.merge_request.fetch_and_persist_discussion_stats", mock_fn),
+        patch("webhook.note.fetch_and_persist_discussion_stats", mock_fn),
+        patch("webhook.emoji.fetch_and_persist_discussion_stats", mock_fn),
+        patch("webhook.pipeline.fetch_and_persist_discussion_stats", mock_fn),
+        patch("periodic_cleanup.fetch_and_persist_discussion_stats", mock_fn),
+        patch("db.DBHelper.any_message_needs_update", mock_any_needs_update),
+        patch("db.DBHelper.upsert_pending_mr_refresh", mock_upsert_pending),
+        patch("db.DBHelper.delete_pending_refresh", mock_delete_pending),
+        patch("db.DBHelper.get_pending_refreshes", mock_get_pending_refreshes),
+    ):
+        yield
+
+
 @pytest.fixture
 def mock_httpx_client():
     client = AsyncMock()
@@ -308,6 +332,7 @@ async def db_connection(test_database_url) -> AsyncGenerator[asyncpg.Connection,
 async def clean_database(db_connection: asyncpg.Connection):
     """Clean database before each test."""
     await db_connection.execute("TRUNCATE gitlab_mr_api.msg_to_delete CASCADE")
+    await db_connection.execute("TRUNCATE gitlab_mr_api.pending_mr_refresh CASCADE")
     await db_connection.execute("TRUNCATE gitlab_mr_api.merge_request_message_ref CASCADE")
     await db_connection.execute("TRUNCATE gitlab_mr_api.merge_request_ref CASCADE")
     await db_connection.execute("TRUNCATE gitlab_mr_api.gitlab_instance CASCADE")
@@ -315,6 +340,7 @@ async def clean_database(db_connection: asyncpg.Connection):
     yield
 
     await db_connection.execute("TRUNCATE gitlab_mr_api.msg_to_delete CASCADE")
+    await db_connection.execute("TRUNCATE gitlab_mr_api.pending_mr_refresh CASCADE")
     await db_connection.execute("TRUNCATE gitlab_mr_api.merge_request_message_ref CASCADE")
     await db_connection.execute("TRUNCATE gitlab_mr_api.merge_request_ref CASCADE")
     await db_connection.execute("TRUNCATE gitlab_mr_api.gitlab_instance CASCADE")

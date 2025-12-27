@@ -118,3 +118,30 @@ class EmojiPayload(BaseModel, extra="allow"):
     user: GLUser
     object_attributes: GLEmojiAttributes
     merge_request: GLEmojiMRAttributes
+
+
+class GLNoteAttributes(BaseModel, extra="allow"):
+    id: int
+    note: str
+    noteable_type: str
+    noteable_id: int
+    url: str
+
+
+class GLNoteMRAttributes(BaseModel, extra="allow"):
+    id: int
+    iid: int
+    title: str
+    state: str
+    url: str
+    source_project_id: int
+    target_project_id: int
+
+
+class NotePayload(BaseModel, extra="allow"):
+    object_kind: Literal["note"]
+    event_type: Literal["note"]
+    user: GLUser
+    project: GLProject
+    object_attributes: GLNoteAttributes
+    merge_request: GLNoteMRAttributes | None = None

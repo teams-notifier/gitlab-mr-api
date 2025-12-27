@@ -99,6 +99,8 @@ def render(
         icon_color = Teams_Color.DEFAULT
         icon_name = "Drafts"
 
+    discussion_stats = mri.merge_request_extra_state.discussion_stats
+
     precalc = {
         "path_with_namespace": mri.merge_request_payload.project.path_with_namespace,
         "iid": mri.merge_request_payload.object_attributes.iid,
@@ -116,6 +118,7 @@ def render(
         "reviewers": reviewers,
         "icon_color": icon_color.value,
         "emojis": emojis,
+        "discussion_stats": discussion_stats,
     }
 
     rendered = templ.render(

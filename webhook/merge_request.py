@@ -11,6 +11,7 @@ from cards.render import render
 from config import config
 from db import database
 from db import dbh
+from gitlab_api import fetch_and_persist_discussion_stats
 from gitlab_model import MergeRequestPayload
 from webhook.messaging import create_or_update_message
 from webhook.messaging import get_all_message_refs
@@ -167,6 +168,17 @@ async def merge_request(
             )
 
     mri = await dbh.get_merge_request_ref_infos(mr)
+
+    if await dbh.any_message_needs_update(mri.merge_request_ref_id, payload_fingerprint):
+        updated_extra_state = await fetch_and_persist_discussion_stats(
+            merge_request_ref_id=mri.merge_request_ref_id,
+            project_url=mr.project.web_url,
+            project_id=mr.object_attributes.target_project_id,
+            mr_iid=mr.object_attributes.iid,
+        )
+        if updated_extra_state is not None:
+            mri.merge_request_extra_state = updated_extra_state
+
     should_be_collapsed: bool = (
         mr.object_attributes.draft
         or mr.object_attributes.work_in_progress

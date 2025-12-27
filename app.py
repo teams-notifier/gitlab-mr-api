@@ -27,6 +27,7 @@ from config import DefaultConfig
 from db import database
 from gitlab_model import EmojiPayload
 from gitlab_model import MergeRequestPayload
+from gitlab_model import NotePayload
 from gitlab_model import PipelinePayload
 from periodic_cleanup import periodic_cleanup
 from webhook.merge_request import PartialMessageUpdateError
@@ -144,7 +145,7 @@ def validate_uuid(val: str) -> str | None:
 
 @app.post("/api/v1/gitlab-webhook")
 async def handle_webhook(
-    payload: MergeRequestPayload | PipelinePayload | EmojiPayload,
+    payload: MergeRequestPayload | PipelinePayload | EmojiPayload | NotePayload,
     x_conversation_token: Annotated[str, Header()],
     x_gitlab_token: Annotated[str, Header()],
     filter_on_participant_ids: str | None = None,
@@ -180,6 +181,8 @@ async def handle_webhook(
             await webhook.pipeline(payload, conversation_tokens)
         if isinstance(payload, EmojiPayload):
             await webhook.emoji(payload, conversation_tokens)
+        if isinstance(payload, NotePayload):
+            await webhook.note(payload)
         return {"status": "ok"}
     except PartialMessageUpdateError as exc:
         raise HTTPException(

@@ -6,8 +6,14 @@ import asyncpg
 import fastapi_structured_logging
 import httpx
 
+from cards.render import render
 from config import DefaultConfig
 from db import DatabaseLifecycleHandler
+from db import MergeRequestInfos
+from db import dbh
+from gitlab_api import fetch_and_persist_discussion_stats
+from webhook.messaging import create_or_update_message
+from webhook.messaging import get_all_message_refs
 
 
 logger = fastapi_structured_logging.get_logger()
@@ -24,13 +30,88 @@ async def periodic_cleanup(config: DefaultConfig, database: DatabaseLifecycleHan
     return await _log_exception(_cleanup_task(config, database))
 
 
+async def _process_pending_refreshes(client: httpx.AsyncClient) -> int:
+    """Process pending MR refreshes that have passed their debounce window."""
+    pending = await dbh.get_pending_refreshes(limit=50)
+    processed = 0
+
+    for row in pending:
+        try:
+            mri = MergeRequestInfos(
+                merge_request_ref_id=row["merge_request_ref_id"],
+                merge_request_payload=row["merge_request_payload"],
+                merge_request_extra_state=row["merge_request_extra_state"],
+                head_pipeline_id=row["head_pipeline_id"],
+            )
+
+            updated_extra_state = await fetch_and_persist_discussion_stats(
+                merge_request_ref_id=mri.merge_request_ref_id,
+                project_url=mri.merge_request_payload.project.web_url,
+                project_id=mri.merge_request_payload.object_attributes.target_project_id,
+                mr_iid=mri.merge_request_payload.object_attributes.iid,
+            )
+            if updated_extra_state is not None:
+                mri.merge_request_extra_state = updated_extra_state
+
+            should_be_collapsed: bool = (
+                mri.merge_request_payload.object_attributes.draft
+                or mri.merge_request_payload.object_attributes.work_in_progress
+                or mri.merge_request_payload.object_attributes.state in ("closed", "merged")
+            )
+            card = render(mri, collapsed=should_be_collapsed, show_collapsible=should_be_collapsed)
+            summary = (
+                f"MR {mri.merge_request_payload.object_attributes.state}:"
+                f" {mri.merge_request_payload.object_attributes.title}\n"
+                f"on {mri.merge_request_payload.project.path_with_namespace}"
+            )
+
+            all_message_refs = await get_all_message_refs(mri.merge_request_ref_id)
+            messages_updated = 0
+
+            for mrmsgref in all_message_refs:
+                if mrmsgref.message_id is None:
+                    continue
+                try:
+                    await create_or_update_message(client, mrmsgref, card=card, summary=summary)
+                    messages_updated += 1
+                except Exception:
+                    logger.warning(
+                        "failed to update message in pending refresh catchup",
+                        merge_request_message_ref_id=mrmsgref.merge_request_message_ref_id,
+                        exc_info=True,
+                    )
+
+            await dbh.delete_pending_refresh(mri.merge_request_ref_id)
+            processed += 1
+
+            logger.info(
+                "pending refresh catchup processed",
+                merge_request_ref_id=mri.merge_request_ref_id,
+                payload_type=row["payload_type"],
+                messages_updated=messages_updated,
+            )
+        except Exception as e:
+            logger.error(
+                "error processing pending refresh",
+                merge_request_ref_id=row["merge_request_ref_id"],
+                error_type=type(e).__name__,
+                error_detail=str(e),
+                exc_info=True,
+            )
+
+    return processed
+
+
 async def _cleanup_task(config: DefaultConfig, database: DatabaseLifecycleHandler):
     timeout = httpx.Timeout(10.0, connect=5.0)
     client = httpx.AsyncClient(timeout=timeout)
     while True:
-        # Cleanup message function goes here :)
-        wait_sec = MAX_WAIT
+        wait_sec: float = MAX_WAIT
         try:
+            refreshes_processed = await _process_pending_refreshes(client)
+            if refreshes_processed > 0:
+                logger.debug("processed pending refreshes", count=refreshes_processed)
+
             connection: asyncpg.Connection
             async with await database.acquire() as connection:
                 stmt = await connection.prepare(
@@ -65,9 +146,18 @@ async def _cleanup_task(config: DefaultConfig, database: DatabaseLifecycleHandle
                                 exc_info=True,
                             )
 
-                value = await connection.fetchval("SELECT min(expire_at) FROM msg_to_delete")
-                if value is not None:
-                    wait_sec = min(MAX_WAIT, (value - datetime.datetime.now(tz=datetime.UTC)).total_seconds())
+                min_delete = await connection.fetchval("SELECT min(expire_at) FROM msg_to_delete")
+                min_refresh = await connection.fetchval("SELECT min(process_after) FROM pending_mr_refresh")
+
+                if min_delete is not None:
+                    wait_sec = min(
+                        wait_sec, (min_delete - datetime.datetime.now(tz=datetime.UTC)).total_seconds()
+                    )
+                if min_refresh is not None:
+                    wait_sec = min(
+                        wait_sec, (min_refresh - datetime.datetime.now(tz=datetime.UTC)).total_seconds()
+                    )
+                wait_sec = max(0.1, wait_sec)
         except Exception as e:
             logger.error(
                 "cleanup task error",

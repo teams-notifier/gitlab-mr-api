@@ -213,6 +213,21 @@ ALTER TABLE ONLY gitlab_mr_api.merge_request_ref
 
 
 --
+-- Name: pending_mr_refresh; Type: TABLE; Schema: gitlab_mr_api; Owner: -
+--
+
+CREATE TABLE gitlab_mr_api.pending_mr_refresh (
+    merge_request_ref_id bigint NOT NULL PRIMARY KEY REFERENCES gitlab_mr_api.merge_request_ref(merge_request_ref_id) ON DELETE CASCADE,
+    payload_type text NOT NULL,
+    first_event_at timestamp with time zone NOT NULL DEFAULT now(),
+    last_event_at timestamp with time zone NOT NULL DEFAULT now(),
+    process_after timestamp with time zone NOT NULL DEFAULT now()
+);
+
+CREATE INDEX pending_mr_refresh_process_after_idx ON gitlab_mr_api.pending_mr_refresh(process_after);
+
+
+--
 -- Name: merge_request_message_ref mr_ref_conv_token_uniq; Type: CONSTRAINT; Schema: gitlab_mr_api; Owner: -
 --
 
