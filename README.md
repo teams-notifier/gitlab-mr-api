@@ -17,6 +17,50 @@ Environment variables or `.env`:
 * `DATABASE_URL`: Database DSN in the form: `postgresql://{USER}:{PASSWORD}@{HOST}/{DATABASE}?search_path=gitlab_mr_api`
 * `VALID_X_GITLAB_TOKEN`: comma separated list of Gitlab's Secret token (sent as `X-Gitlab-Token` header). A UUIDv4 generated token is recommended.
 
+### Database Migrations
+
+Run migrations using `db_migrate.py`:
+
+```bash
+DATABASE_URL="postgresql://..." ./db_migrate.py
+```
+
+For Kubernetes/Helm, use a pre-install/pre-upgrade hook:
+
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-db-migrate
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-1"
+    helm.sh/hook-delete-policy: hook-succeeded
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: migrate
+        image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
+        command: ["/app/.venv/bin/python", "/app/db_migrate.py"]
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.database.secretName }}
+              key: DATABASE_URL
+```
+
+The migration script uses dbmate-compatible format (`-- migrate:up` / `-- migrate:down` sections):
+- Creates `schema_migrations` table if missing
+- Bootstraps existing databases by detecting already-applied migrations:
+  - `00000000000000`: `merge_request_ref` table exists
+  - `20250121000000`: `last_processed_fingerprint` column exists
+  - `20250121010000`: `last_processed_fingerprint` column exists
+  - `20251210000000`: `last_processed_updated_at` column exists
+- Runs pending migrations in order
+
 ### Notes on `db/schema.sql`
 
 The dump uses a dedicated schema but expects `pgcrypto` in the *public* schema for `uuid_generate_v7`.
