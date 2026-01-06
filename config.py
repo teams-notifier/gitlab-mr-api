@@ -28,6 +28,8 @@ class DefaultConfig:
     LOG_QUERIES = os.environ.get("LOG_QUERIES", "")
     VALID_X_GITLAB_TOKEN = os.environ.get("VALID_X_GITLAB_TOKEN", "")
     MESSAGE_DELETE_DELAY_SECONDS = int(os.environ.get("MESSAGE_DELETE_DELAY_SECONDS", "30"))
+    NOTE_DEBOUNCE_SECONDS = float(os.environ.get("NOTE_DEBOUNCE_SECONDS", "5.0"))
+    EMOJI_DEBOUNCE_SECONDS = float(os.environ.get("EMOJI_DEBOUNCE_SECONDS", "5.0"))
     _valid_tokens: list[str]
     _gitlab_api_tokens: dict[str, GitLabApiToken]
 

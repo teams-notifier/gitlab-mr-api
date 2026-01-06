@@ -10,10 +10,10 @@ from cards.render import render
 from config import DefaultConfig
 from db import DatabaseLifecycleHandler
 from db import MergeRequestInfos
+from db import compute_mri_fingerprint
 from db import dbh
 from gitlab_api import fetch_and_persist_discussion_stats
-from webhook.messaging import create_or_update_message
-from webhook.messaging import get_all_message_refs
+from webhook.messaging import update_all_messages_transactional
 
 
 logger = fastapi_structured_logging.get_logger()
@@ -30,7 +30,7 @@ async def periodic_cleanup(config: DefaultConfig, database: DatabaseLifecycleHan
     return await _log_exception(_cleanup_task(config, database))
 
 
-async def _process_pending_refreshes(client: httpx.AsyncClient) -> int:
+async def _process_pending_refreshes() -> int:
     """Process pending MR refreshes that have passed their debounce window."""
     pending = await dbh.get_pending_refreshes(limit=50)
     processed = 0
@@ -59,36 +59,33 @@ async def _process_pending_refreshes(client: httpx.AsyncClient) -> int:
                 or mri.merge_request_payload.object_attributes.state in ("closed", "merged")
             )
             card = render(mri, collapsed=should_be_collapsed, show_collapsible=should_be_collapsed)
+            datasource_fingerprint = compute_mri_fingerprint(mri)
             summary = (
                 f"MR {mri.merge_request_payload.object_attributes.state}:"
                 f" {mri.merge_request_payload.object_attributes.title}\n"
                 f"on {mri.merge_request_payload.project.path_with_namespace}"
             )
 
-            all_message_refs = await get_all_message_refs(mri.merge_request_ref_id)
-            messages_updated = 0
+            event_updated_at: datetime.datetime = row["last_event_at"]
 
-            for mrmsgref in all_message_refs:
-                if mrmsgref.message_id is None:
-                    continue
-                try:
-                    await create_or_update_message(client, mrmsgref, card=card, summary=summary)
-                    messages_updated += 1
-                except Exception:
-                    logger.warning(
-                        "failed to update message in pending refresh catchup",
-                        merge_request_message_ref_id=mrmsgref.merge_request_message_ref_id,
-                        exc_info=True,
-                    )
+            messages_updated = await update_all_messages_transactional(
+                mri,
+                card,
+                summary,
+                datasource_fingerprint,
+                event_updated_at,
+                row["payload_type"],
+            )
 
             await dbh.delete_pending_refresh(mri.merge_request_ref_id)
             processed += 1
 
             logger.info(
-                "pending refresh catchup processed",
+                "pending refresh processed",
                 merge_request_ref_id=mri.merge_request_ref_id,
                 payload_type=row["payload_type"],
                 messages_updated=messages_updated,
+                fingerprint=datasource_fingerprint[:16],
             )
         except Exception as e:
             logger.error(
@@ -108,7 +105,7 @@ async def _cleanup_task(config: DefaultConfig, database: DatabaseLifecycleHandle
     while True:
         wait_sec: float = MAX_WAIT
         try:
-            refreshes_processed = await _process_pending_refreshes(client)
+            refreshes_processed = await _process_pending_refreshes()
             if refreshes_processed > 0:
                 logger.debug("processed pending refreshes", count=refreshes_processed)
 

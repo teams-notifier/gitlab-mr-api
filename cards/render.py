@@ -130,8 +130,6 @@ def render(
         show_collapsible=show_collapsible,
         icon_name=icon_name,
     )
-    # print(rendered)
-    # open("/tmp/notiteams-gitlab-mr-api-OUTPUT.yaml", "w").write(rendered)
-    result_as_json: dict[str, Any] = yaml.safe_load(rendered)
+    card: dict[str, Any] = yaml.safe_load(rendered)
 
-    return result_as_json
+    return card

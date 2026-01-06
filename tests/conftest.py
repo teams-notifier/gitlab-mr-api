@@ -115,8 +115,6 @@ def mock_discussion_stats():
     mock_get_pending_refreshes = AsyncMock(return_value=[])
     with (
         patch("webhook.merge_request.fetch_and_persist_discussion_stats", mock_fn),
-        patch("webhook.note.fetch_and_persist_discussion_stats", mock_fn),
-        patch("webhook.emoji.fetch_and_persist_discussion_stats", mock_fn),
         patch("webhook.pipeline.fetch_and_persist_discussion_stats", mock_fn),
         patch("periodic_cleanup.fetch_and_persist_discussion_stats", mock_fn),
         patch("db.DBHelper.any_message_needs_update", mock_any_needs_update),

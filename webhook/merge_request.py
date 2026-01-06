@@ -9,6 +9,7 @@ import periodic_cleanup
 
 from cards.render import render
 from config import config
+from db import compute_mri_fingerprint
 from db import database
 from db import dbh
 from gitlab_api import fetch_and_persist_discussion_stats
@@ -129,11 +130,8 @@ async def merge_request(
 
             if mr.changes and "draft" in mr.changes and not mr.object_attributes.draft:
                 temp_mri = await dbh.get_merge_request_ref_infos(mr)
-                temp_card = render(
-                    temp_mri,
-                    collapsed=False,
-                    show_collapsible=False,
-                )
+                temp_card = render(temp_mri, collapsed=False, show_collapsible=False)
+                temp_fingerprint = compute_mri_fingerprint(temp_mri)
                 temp_summary = (
                     f"MR {temp_mri.merge_request_payload.object_attributes.state}:"
                     f" {temp_mri.merge_request_payload.object_attributes.title}\n"
@@ -144,7 +142,7 @@ async def merge_request(
                     temp_mri,
                     temp_card,
                     temp_summary,
-                    payload_fingerprint,
+                    temp_fingerprint,
                     payload_updated_at,
                     "draft-to-ready",
                     schedule_deletion=True,
@@ -168,8 +166,9 @@ async def merge_request(
             )
 
     mri = await dbh.get_merge_request_ref_infos(mr)
+    datasource_fingerprint = compute_mri_fingerprint(mri)
 
-    if await dbh.any_message_needs_update(mri.merge_request_ref_id, payload_fingerprint):
+    if await dbh.any_message_needs_update(mri.merge_request_ref_id, datasource_fingerprint):
         updated_extra_state = await fetch_and_persist_discussion_stats(
             merge_request_ref_id=mri.merge_request_ref_id,
             project_url=mr.project.web_url,
@@ -178,6 +177,7 @@ async def merge_request(
         )
         if updated_extra_state is not None:
             mri.merge_request_extra_state = updated_extra_state
+            datasource_fingerprint = compute_mri_fingerprint(mri)
 
     should_be_collapsed: bool = (
         mr.object_attributes.draft
@@ -188,11 +188,7 @@ async def merge_request(
             "merged",
         )
     )
-    card = render(
-        mri,
-        collapsed=should_be_collapsed,
-        show_collapsible=should_be_collapsed,
-    )
+    card = render(mri, collapsed=should_be_collapsed, show_collapsible=should_be_collapsed)
     summary = (
         f"MR {mri.merge_request_payload.object_attributes.state}:"
         f" {mri.merge_request_payload.object_attributes.title}\n"
@@ -204,7 +200,7 @@ async def merge_request(
             mri,
             card,
             summary,
-            payload_fingerprint,
+            datasource_fingerprint,
             payload_updated_at,
             "close/merge",
             schedule_deletion=True,
@@ -236,12 +232,12 @@ async def merge_request(
                         continue
                     if (
                         payload_updated_at == mrmsgref.last_processed_updated_at
-                        and mrmsgref.last_processed_fingerprint == payload_fingerprint
+                        and mrmsgref.last_processed_fingerprint == datasource_fingerprint
                     ):
                         logger.debug(
                             "message ref already processed - same timestamp and fingerprint",
                             merge_request_message_ref_id=mrmsgref.merge_request_message_ref_id,
-                            fingerprint=payload_fingerprint,
+                            fingerprint=datasource_fingerprint,
                         )
                         continue
 
@@ -280,17 +276,37 @@ async def merge_request(
                                          AND (last_processed_updated_at IS NULL
                                               OR last_processed_updated_at < $3)""",
                                     mrmsgref.message_id,
-                                    payload_fingerprint,
+                                    datasource_fingerprint,
                                     payload_updated_at,
                                     mrmsgref.merge_request_message_ref_id,
                                 )
+                        else:
+                            async with await database.acquire() as conn:
+                                row = await conn.fetchrow(
+                                    """SELECT message_id, last_processed_updated_at
+                                       FROM merge_request_message_ref
+                                       WHERE merge_request_message_ref_id = $1""",
+                                    mrmsgref.merge_request_message_ref_id,
+                                )
+                                if row and row["message_id"] is not None:
+                                    existing_ts = row["last_processed_updated_at"]
+                                    if existing_ts is None or payload_updated_at > existing_ts:
+                                        mrmsgref.message_id = row["message_id"]
+                                        await update_message_with_fingerprint(
+                                            client,
+                                            mrmsgref,
+                                            card,
+                                            summary,
+                                            datasource_fingerprint,
+                                            payload_updated_at,
+                                        )
                     else:
                         await update_message_with_fingerprint(
                             client,
                             mrmsgref,
                             card,
                             summary,
-                            payload_fingerprint,
+                            datasource_fingerprint,
                             payload_updated_at,
                         )
                     messages_processed += 1

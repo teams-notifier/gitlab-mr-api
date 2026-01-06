@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
-import hashlib
-
 import asyncpg
 import fastapi_structured_logging
 
-from cards.render import render
+import periodic_cleanup
+
+from config import config
 from db import EmojiEntry
 from db import GitlabUser
-from db import MergeRequestInfos
 from db import database
 from db import dbh
-from gitlab_api import fetch_and_persist_discussion_stats
 from gitlab_model import EmojiPayload
-from webhook.messaging import update_all_messages_transactional
 
 
 logger = fastapi_structured_logging.get_logger()
@@ -21,17 +18,18 @@ logger = fastapi_structured_logging.get_logger()
 async def emoji(
     emoji: EmojiPayload,
     conversation_tokens: list[str],
-) -> MergeRequestInfos | None:
+) -> dict[str, str]:
+    """Handle emoji webhook events for MRs - persists state and queues for processing."""
     if emoji.object_attributes.awardable_type != "MergeRequest":
-        return None
+        return {"status": "skipped", "reason": "not_mr_emoji"}
 
-    payload_fingerprint = hashlib.sha256(emoji.model_dump_json().encode("utf8")).hexdigest()
     logger.info(
         "processing emoji hook",
         project_id=emoji.merge_request.target_project_id,
         merge_request_iid=emoji.merge_request.iid,
         object_kind=emoji.object_kind,
-        fingerprint=payload_fingerprint,
+        event_type=emoji.event_type,
+        emoji_name=emoji.object_attributes.name,
     )
 
     mri = await dbh.get_mri_from_url_pid_mriid(
@@ -40,7 +38,12 @@ async def emoji(
         mr_iid=emoji.merge_request.iid,
     )
     if mri is None:
-        return None
+        logger.debug(
+            "no existing MR ref found for emoji event",
+            project_id=emoji.merge_request.target_project_id,
+            mr_iid=emoji.merge_request.iid,
+        )
+        return {"status": "skipped", "reason": "no_mr_ref"}
 
     key = f"{emoji.object_attributes.name}:{emoji.object_attributes.user_id}"
     connection: asyncpg.Connection
@@ -49,8 +52,7 @@ async def emoji(
             """UPDATE merge_request_ref
                 SET merge_request_extra_state = jsonb_set(merge_request_extra_state, $1, $2::jsonb)
                 WHERE merge_request_ref_id = $3
-                RETURNING merge_request_ref_id, merge_request_payload,
-                            merge_request_extra_state, head_pipeline_id""",
+                RETURNING merge_request_ref_id""",
             ["emojis", key],
             EmojiEntry(
                 event_type=emoji.event_type,
@@ -64,32 +66,22 @@ async def emoji(
             ).model_dump(),
             mri.merge_request_ref_id,
         )
-        if res is not None:
-            mri = MergeRequestInfos(**res)
+        if res is None:
+            return {"status": "skipped", "reason": "update_failed"}
 
-            if await dbh.any_message_needs_update(mri.merge_request_ref_id, payload_fingerprint):
-                updated_extra_state = await fetch_and_persist_discussion_stats(
-                    merge_request_ref_id=mri.merge_request_ref_id,
-                    project_url=mri.merge_request_payload.project.web_url,
-                    project_id=emoji.merge_request.target_project_id,
-                    mr_iid=emoji.merge_request.iid,
-                )
-                if updated_extra_state is not None:
-                    mri.merge_request_extra_state = updated_extra_state
+    await dbh.upsert_pending_mr_refresh(
+        mri.merge_request_ref_id,
+        payload_type="emoji",
+        debounce_seconds=config.EMOJI_DEBOUNCE_SECONDS,
+    )
+    periodic_cleanup.reschedule()
 
-            card = render(mri)
-            summary = (
-                f"MR {mri.merge_request_payload.object_attributes.state}:"
-                f" {mri.merge_request_payload.object_attributes.title}\n"
-                f"on {mri.merge_request_payload.project.path_with_namespace}"
-            )
-            await update_all_messages_transactional(
-                mri,
-                card,
-                summary,
-                payload_fingerprint,
-                None,
-                "emoji",
-            )
-            return mri
-    return None
+    logger.debug(
+        "emoji event queued for processing",
+        project_id=emoji.merge_request.target_project_id,
+        mr_iid=emoji.merge_request.iid,
+        merge_request_ref_id=mri.merge_request_ref_id,
+        emoji_key=key,
+    )
+
+    return {"status": "queued"}

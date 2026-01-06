@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import asyncio
 import datetime
+import hashlib
 import json
 import urllib.parse
 
@@ -131,6 +132,16 @@ class MergeRequestInfos(BaseModel):
     merge_request_payload: MergeRequestPayload
     merge_request_extra_state: MergeRequestExtraState
     head_pipeline_id: int | None
+
+
+def compute_mri_fingerprint(mri: MergeRequestInfos) -> str:
+    """Compute a stable fingerprint from MRI data for deduplication."""
+    datasource = {
+        "mri_payload": mri.merge_request_payload.model_dump(),
+        "mri_extra_state": mri.merge_request_extra_state.model_dump(),
+        "head_pipeline_id": mri.head_pipeline_id,
+    }
+    return hashlib.sha256(json.dumps(datasource, sort_keys=True, default=str).encode()).hexdigest()
 
 
 class DBHelper:

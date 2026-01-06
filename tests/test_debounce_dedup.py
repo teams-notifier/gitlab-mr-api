@@ -40,48 +40,22 @@ class TestNoteHandlerDebounce:
         return payload
 
     @pytest.mark.asyncio
-    async def test_first_note_processes_immediately(self, mock_mri, mock_note_payload):
-        """First note event should process immediately."""
+    async def test_note_queues_for_processing(self, mock_mri, mock_note_payload):
+        """Note event should queue for processing via periodic_cleanup."""
         with (
             patch("webhook.note.dbh") as mock_dbh,
-            patch("webhook.note.fetch_and_persist_discussion_stats", new_callable=AsyncMock) as mock_fetch,
-            patch("webhook.note.render") as mock_render,
-            patch("webhook.note.get_all_message_refs", new_callable=AsyncMock) as mock_get_refs,
-            patch("webhook.note.httpx.AsyncClient") as mock_client_class,
+            patch("webhook.note.periodic_cleanup") as mock_cleanup,
         ):
             mock_dbh.get_mri_from_url_pid_mriid = AsyncMock(return_value=mock_mri)
-            mock_dbh.upsert_pending_mr_refresh = AsyncMock(return_value=True)  # First event
-            mock_fetch.return_value = None
-            mock_render.return_value = {"type": "AdaptiveCard"}
-            mock_get_refs.return_value = []
-
-            mock_client = AsyncMock()
-            mock_client_class.return_value.__aenter__.return_value = mock_client
+            mock_dbh.upsert_pending_mr_refresh = AsyncMock(return_value=True)
 
             from webhook.note import note
 
             result = await note(mock_note_payload)
 
-        assert result["status"] == "ok"
-        mock_fetch.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_subsequent_note_is_debounced(self, mock_mri, mock_note_payload):
-        """Subsequent note events should be debounced."""
-        with (
-            patch("webhook.note.dbh") as mock_dbh,
-            patch("webhook.note.fetch_and_persist_discussion_stats", new_callable=AsyncMock) as mock_fetch,
-        ):
-            mock_dbh.get_mri_from_url_pid_mriid = AsyncMock(return_value=mock_mri)
-            mock_dbh.upsert_pending_mr_refresh = AsyncMock(return_value=False)  # Debounced
-
-            from webhook.note import note
-
-            result = await note(mock_note_payload)
-
-        assert result["status"] == "debounced"
-        assert result["reason"] == "pending_catchup"
-        mock_fetch.assert_not_called()
+        assert result["status"] == "queued"
+        mock_dbh.upsert_pending_mr_refresh.assert_called_once()
+        mock_cleanup.reschedule.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_note_skipped_when_no_mr_ref(self, mock_note_payload):
@@ -103,16 +77,12 @@ class TestPendingRefreshCatchup:
     @pytest.mark.asyncio
     async def test_process_pending_refreshes_empty(self):
         """No-op when no pending refreshes."""
-        with (
-            patch("periodic_cleanup.dbh") as mock_dbh,
-            patch("periodic_cleanup.fetch_and_persist_discussion_stats", new_callable=AsyncMock),
-        ):
+        with patch("periodic_cleanup.dbh") as mock_dbh:
             mock_dbh.get_pending_refreshes = AsyncMock(return_value=[])
 
             from periodic_cleanup import _process_pending_refreshes
 
-            mock_client = AsyncMock()
-            result = await _process_pending_refreshes(mock_client)
+            result = await _process_pending_refreshes()
 
         assert result == 0
 
@@ -177,21 +147,25 @@ class TestPendingRefreshCatchup:
                 "periodic_cleanup.fetch_and_persist_discussion_stats", new_callable=AsyncMock
             ) as mock_fetch,
             patch("periodic_cleanup.render") as mock_render,
-            patch("periodic_cleanup.get_all_message_refs", new_callable=AsyncMock) as mock_get_refs,
+            patch("periodic_cleanup.compute_mri_fingerprint") as mock_fingerprint,
+            patch(
+                "periodic_cleanup.update_all_messages_transactional", new_callable=AsyncMock
+            ) as mock_update,
         ):
             mock_dbh.get_pending_refreshes = AsyncMock(return_value=[pending_row])
             mock_dbh.delete_pending_refresh = AsyncMock()
             mock_fetch.return_value = None
             mock_render.return_value = {"type": "AdaptiveCard"}
-            mock_get_refs.return_value = []
+            mock_fingerprint.return_value = "test-fingerprint"
+            mock_update.return_value = 0
 
             from periodic_cleanup import _process_pending_refreshes
 
-            mock_client = AsyncMock()
-            result = await _process_pending_refreshes(mock_client)
+            result = await _process_pending_refreshes()
 
         assert result == 1
         mock_dbh.delete_pending_refresh.assert_called_once_with(1)
+        mock_update.assert_called_once()
 
 
 class TestPreCheckDeduplication:
@@ -217,6 +191,7 @@ class TestPreCheckDeduplication:
                 "webhook.merge_request.fetch_and_persist_discussion_stats", new_callable=AsyncMock
             ) as mock_fetch,
             patch("webhook.merge_request.render") as mock_render,
+            patch("webhook.merge_request.compute_mri_fingerprint") as mock_fingerprint,
             patch("webhook.merge_request.get_or_create_message_refs", new_callable=AsyncMock),
             patch("webhook.merge_request.get_all_message_refs", new_callable=AsyncMock) as mock_get_refs,
             patch("webhook.merge_request.httpx.AsyncClient") as mock_client_class,
@@ -233,6 +208,7 @@ class TestPreCheckDeduplication:
             )
 
             mock_render.return_value = {"type": "AdaptiveCard"}
+            mock_fingerprint.return_value = "test-fingerprint"
             mock_get_refs.return_value = []
 
             mock_client = AsyncMock()

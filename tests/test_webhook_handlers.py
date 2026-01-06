@@ -3,8 +3,6 @@
 Tests for emoji and pipeline webhook handlers.
 """
 
-import hashlib
-
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
@@ -77,9 +75,11 @@ class TestEmojiHandler:
 
         result = await emoji(sample_emoji_payload, ["token-1"])
 
-        assert result is None
+        assert result["status"] == "skipped"
+        assert result["reason"] == "not_mr_emoji"
 
-    async def test_emoji_updates_extra_state_and_messages(self, sample_emoji_payload, sample_mri):
+    async def test_emoji_queues_for_processing(self, sample_emoji_payload, sample_mri):
+        """Emoji event should persist state and queue for processing."""
         from webhook.emoji import emoji
 
         mock_emoji_entry = MagicMock()
@@ -87,43 +87,41 @@ class TestEmojiHandler:
 
         with (
             patch("webhook.emoji.database") as mock_db,
-            patch("webhook.emoji.dbh.get_mri_from_url_pid_mriid", return_value=sample_mri),
-            patch("webhook.emoji.update_all_messages_transactional") as mock_update,
-            patch("webhook.emoji.render", return_value={"card": "data"}),
-            patch("webhook.emoji.MergeRequestInfos", return_value=sample_mri),
+            patch("webhook.emoji.dbh") as mock_dbh,
+            patch("webhook.emoji.periodic_cleanup") as mock_cleanup,
             patch("webhook.emoji.EmojiEntry", return_value=mock_emoji_entry),
         ):
+            mock_dbh.get_mri_from_url_pid_mriid = AsyncMock(return_value=sample_mri)
+            mock_dbh.upsert_pending_mr_refresh = AsyncMock(return_value=True)
+
             mock_conn = MagicMock()
-            mock_conn.fetchrow = AsyncMock(
-                return_value={
-                    "merge_request_ref_id": 1,
-                    "merge_request_payload": sample_mri.merge_request_payload,
-                    "merge_request_extra_state": {},
-                    "head_pipeline_id": None,
-                }
-            )
+            mock_conn.fetchrow = AsyncMock(return_value={"merge_request_ref_id": 1})
 
             mock_acquire_ctx = MagicMock()
             mock_acquire_ctx.__aenter__ = AsyncMock(return_value=mock_conn)
             mock_acquire_ctx.__aexit__ = AsyncMock()
             mock_db.acquire = AsyncMock(return_value=mock_acquire_ctx)
 
-            mock_update.return_value = 1
-
             result = await emoji(sample_emoji_payload, ["token-1"])
 
-            assert result is not None
-            mock_update.assert_called_once()
+        assert result["status"] == "queued"
+        mock_dbh.upsert_pending_mr_refresh.assert_called_once()
+        mock_cleanup.reschedule.assert_called_once()
 
-    async def test_emoji_returns_none_when_mr_not_found(self, sample_emoji_payload):
+    async def test_emoji_skipped_when_no_mr_ref(self, sample_emoji_payload):
+        """Emoji should be skipped when MR ref not found."""
         from webhook.emoji import emoji
 
-        with patch("webhook.emoji.dbh.get_mri_from_url_pid_mriid", return_value=None):
+        with patch("webhook.emoji.dbh") as mock_dbh:
+            mock_dbh.get_mri_from_url_pid_mriid = AsyncMock(return_value=None)
+
             result = await emoji(sample_emoji_payload, ["token-1"])
 
-            assert result is None
+        assert result["status"] == "skipped"
+        assert result["reason"] == "no_mr_ref"
 
-    async def test_emoji_passes_fingerprint_to_update(self, sample_emoji_payload, sample_mri):
+    async def test_emoji_persists_state_before_queuing(self, sample_emoji_payload, sample_mri):
+        """Emoji handler should persist emoji state to DB before queuing."""
         from webhook.emoji import emoji
 
         mock_emoji_entry = MagicMock()
@@ -131,50 +129,54 @@ class TestEmojiHandler:
 
         with (
             patch("webhook.emoji.database") as mock_db,
-            patch("webhook.emoji.dbh.get_mri_from_url_pid_mriid", return_value=sample_mri),
-            patch("webhook.emoji.update_all_messages_transactional") as mock_update,
-            patch("webhook.emoji.render", return_value={"card": "data"}),
-            patch("webhook.emoji.MergeRequestInfos", return_value=sample_mri),
+            patch("webhook.emoji.dbh") as mock_dbh,
+            patch("webhook.emoji.periodic_cleanup"),
             patch("webhook.emoji.EmojiEntry", return_value=mock_emoji_entry),
         ):
+            mock_dbh.get_mri_from_url_pid_mriid = AsyncMock(return_value=sample_mri)
+            mock_dbh.upsert_pending_mr_refresh = AsyncMock(return_value=True)
+
             mock_conn = MagicMock()
-            mock_conn.fetchrow = AsyncMock(
-                return_value={
-                    "merge_request_ref_id": 1,
-                    "merge_request_payload": sample_mri.merge_request_payload,
-                    "merge_request_extra_state": {},
-                    "head_pipeline_id": None,
-                }
-            )
+            mock_conn.fetchrow = AsyncMock(return_value={"merge_request_ref_id": 1})
 
             mock_acquire_ctx = MagicMock()
             mock_acquire_ctx.__aenter__ = AsyncMock(return_value=mock_conn)
             mock_acquire_ctx.__aexit__ = AsyncMock()
             mock_db.acquire = AsyncMock(return_value=mock_acquire_ctx)
-
-            mock_update.return_value = 1
 
             await emoji(sample_emoji_payload, ["token-1"])
 
-            expected_fingerprint = hashlib.sha256(b'{"test":"data"}').hexdigest()
-            mock_update.assert_called_once()
-            call_args = mock_update.call_args
-            assert call_args[0][3] == expected_fingerprint
+        mock_conn.fetchrow.assert_called_once()
+        call_args = mock_conn.fetchrow.call_args[0][0]
+        assert "UPDATE merge_request_ref" in call_args
+        assert "jsonb_set" in call_args
+        assert "emojis" in str(mock_conn.fetchrow.call_args)
 
-    async def test_emoji_returns_none_when_update_fails(
-        self, mock_database, sample_emoji_payload, sample_mri
-    ):
+    async def test_emoji_skipped_when_db_update_fails(self, sample_emoji_payload, sample_mri):
         from webhook.emoji import emoji
 
-        mock_db, mock_conn = mock_database
+        mock_emoji_entry = MagicMock()
+        mock_emoji_entry.model_dump.return_value = {"emoji": "data"}
 
-        with patch("webhook.emoji.dbh.get_mri_from_url_pid_mriid", return_value=sample_mri):
-            mock_conn.fetchval.return_value = None
-            mock_conn.fetchrow.return_value = None
+        with (
+            patch("webhook.emoji.database") as mock_db,
+            patch("webhook.emoji.dbh") as mock_dbh,
+            patch("webhook.emoji.EmojiEntry", return_value=mock_emoji_entry),
+        ):
+            mock_dbh.get_mri_from_url_pid_mriid = AsyncMock(return_value=sample_mri)
+
+            mock_conn = MagicMock()
+            mock_conn.fetchrow = AsyncMock(return_value=None)
+
+            mock_acquire_ctx = MagicMock()
+            mock_acquire_ctx.__aenter__ = AsyncMock(return_value=mock_conn)
+            mock_acquire_ctx.__aexit__ = AsyncMock()
+            mock_db.acquire = AsyncMock(return_value=mock_acquire_ctx)
 
             result = await emoji(sample_emoji_payload, ["token-1"])
 
-            assert result is None
+        assert result["status"] == "skipped"
+        assert result["reason"] == "update_failed"
 
 
 class TestPipelineHandler:
@@ -184,6 +186,7 @@ class TestPipelineHandler:
         with (
             patch("webhook.pipeline.database") as mock_db,
             patch("webhook.pipeline.render") as mock_render,
+            patch("webhook.pipeline.compute_mri_fingerprint", return_value="test-fp"),
             patch("webhook.pipeline.update_all_messages_transactional") as mock_update,
             patch("webhook.pipeline.MergeRequestInfos", return_value=sample_mri),
         ):
@@ -232,6 +235,7 @@ class TestPipelineHandler:
         with (
             patch("webhook.pipeline.database") as mock_db,
             patch("webhook.pipeline.render") as mock_render,
+            patch("webhook.pipeline.compute_mri_fingerprint", return_value="test-fp"),
             patch("webhook.pipeline.update_all_messages_transactional") as mock_update,
             patch("webhook.pipeline.MergeRequestInfos", return_value=sample_mri),
         ):
@@ -255,10 +259,9 @@ class TestPipelineHandler:
 
             await pipeline(sample_pipeline_payload, ["token-1"])
 
-            expected_fingerprint = hashlib.sha256(b'{"pipeline":"data"}').hexdigest()
             mock_update.assert_called_once()
             call_args = mock_update.call_args
-            assert call_args[0][3] == expected_fingerprint
+            assert call_args[0][3] == "test-fp"
 
     async def test_pipeline_returns_none_when_update_fails(self, sample_pipeline_payload):
         from webhook.pipeline import pipeline
@@ -283,6 +286,7 @@ class TestPipelineHandler:
         with (
             patch("webhook.pipeline.database") as mock_db,
             patch("webhook.pipeline.render") as mock_render,
+            patch("webhook.pipeline.compute_mri_fingerprint", return_value="test-fp"),
             patch("webhook.pipeline.update_all_messages_transactional"),
             patch("webhook.pipeline.MergeRequestInfos", return_value=sample_mri),
         ):
@@ -315,24 +319,7 @@ class TestPipelineHandler:
 class TestFingerprintDeduplication:
     """Test webhook fingerprint deduplication across handlers."""
 
-    async def test_emoji_logs_fingerprint_on_entry(self, mock_database, sample_emoji_payload, sample_mri):
-        from webhook.emoji import emoji
-
-        mock_db, mock_conn = mock_database
-
-        with (
-            patch("webhook.emoji.dbh.get_mri_from_url_pid_mriid", return_value=sample_mri),
-            patch("webhook.emoji.logger") as mock_logger,
-        ):
-            mock_conn.fetchval.return_value = None
-            mock_conn.fetchrow.return_value = None
-
-            await emoji(sample_emoji_payload, ["token-1"])
-
-            info_calls = [call for call in mock_logger.info.call_args_list if "fingerprint" in str(call)]
-            assert len(info_calls) > 0
-
-    async def test_pipeline_logs_fingerprint_on_entry(self, sample_pipeline_payload):
+    async def test_pipeline_logs_on_entry(self, sample_pipeline_payload):
         from webhook.pipeline import pipeline
 
         with patch("webhook.pipeline.database") as mock_db, patch("webhook.pipeline.logger") as mock_logger:
@@ -347,7 +334,7 @@ class TestFingerprintDeduplication:
 
             await pipeline(sample_pipeline_payload, ["token-1"])
 
-            info_calls = [call for call in mock_logger.info.call_args_list if "fingerprint" in str(call)]
+            info_calls = [call for call in mock_logger.info.call_args_list if "pipeline" in str(call)]
             assert len(info_calls) > 0
 
 
@@ -357,9 +344,10 @@ class TestCriticalErrorPaths:
     async def test_emoji_survives_missing_mr(self, sample_emoji_payload):
         from webhook.emoji import emoji
 
-        with patch("webhook.emoji.dbh.get_mri_from_url_pid_mriid", return_value=None):
+        with patch("webhook.emoji.dbh") as mock_dbh:
+            mock_dbh.get_mri_from_url_pid_mriid = AsyncMock(return_value=None)
             result = await emoji(sample_emoji_payload, ["token-1"])
-            assert result is None
+            assert result["status"] == "skipped"
 
     async def test_pipeline_survives_database_update_failure(self, sample_pipeline_payload):
         from webhook.pipeline import pipeline

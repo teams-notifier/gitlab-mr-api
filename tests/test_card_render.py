@@ -183,3 +183,35 @@ class TestRenderOutput:
         result = render(mri)
         assert "fallbackText" in result
         assert "Test Title" in result["fallbackText"]
+
+
+class TestComputeMriFingerprint:
+    """Tests for compute_mri_fingerprint()."""
+
+    def test_fingerprint_is_stable(self):
+        """Same inputs should produce same fingerprint."""
+        from db import compute_mri_fingerprint
+
+        mri = make_mri(title="Test MR")
+        fp1 = compute_mri_fingerprint(mri)
+        fp2 = compute_mri_fingerprint(mri)
+        assert fp1 == fp2
+
+    def test_fingerprint_changes_with_input(self):
+        """Different inputs should produce different fingerprints."""
+        from db import compute_mri_fingerprint
+
+        mri1 = make_mri(title="Test MR 1")
+        mri2 = make_mri(title="Test MR 2")
+        fp1 = compute_mri_fingerprint(mri1)
+        fp2 = compute_mri_fingerprint(mri2)
+        assert fp1 != fp2
+
+    def test_fingerprint_is_sha256(self):
+        """Fingerprint should be a valid SHA256 hex string."""
+        from db import compute_mri_fingerprint
+
+        mri = make_mri()
+        fp = compute_mri_fingerprint(mri)
+        assert len(fp) == 64
+        assert all(c in "0123456789abcdef" for c in fp)
