@@ -423,4 +423,4 @@ async def test_wait_time_calculation_with_future_expiry(mock_database, fresh_sig
         except TimeoutError:
             pass
 
-    assert connection.fetchval.call_count == 1
+    assert connection.fetchval.call_count == 2

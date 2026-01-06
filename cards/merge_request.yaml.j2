@@ -211,6 +211,29 @@ body:
           #size: Small
           wrap: true
 {% endif %}
+{% if precalc.discussion_stats and precalc.discussion_stats.threads_total > 0 %}
+    - type: TableRow
+      cells:
+      - type: TableCell
+        verticalContentAlignment: Center
+        items:
+        - type: TextBlock
+          text: Threads
+          size: Small
+          weight: Bolder
+          wrap: true
+      - type: TableCell
+        verticalContentAlignment: Center
+        items:
+        - type: TextBlock
+{% if precalc.discussion_stats.threads_unresolved > 0 %}
+          color: attention
+{% else %}
+          color: good
+{% endif %}
+          text: '{{ precalc.discussion_stats.threads_resolved }}/{{ precalc.discussion_stats.threads_total }} resolved'
+          wrap: true
+{% endif %}
 {% if mri.head_pipeline_id %}
     - type: TableRow
       cells:

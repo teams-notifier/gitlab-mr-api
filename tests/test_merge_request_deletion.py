@@ -45,6 +45,7 @@ async def test_merge_close_uses_transactional_update(mock_database, sample_merge
         patch("webhook.merge_request.dbh.update_merge_request_ref_payload", return_value=sample_mri),
         patch("webhook.merge_request.dbh.get_merge_request_ref_infos", return_value=sample_mri),
         patch("webhook.merge_request.render"),
+        patch("webhook.merge_request.compute_mri_fingerprint", return_value="test-fp"),
         patch("webhook.merge_request.update_all_messages_transactional") as mock_update,
         patch("webhook.merge_request.periodic_cleanup"),
     ):
@@ -91,6 +92,7 @@ async def test_merge_close_transactional_rollback_on_failure(mock_database, samp
         patch("webhook.merge_request.dbh.update_merge_request_ref_payload", return_value=sample_mri),
         patch("webhook.merge_request.dbh.get_merge_request_ref_infos", return_value=sample_mri),
         patch("webhook.merge_request.render"),
+        patch("webhook.merge_request.compute_mri_fingerprint", return_value="test-fp"),
         patch("webhook.merge_request.update_all_messages_transactional") as mock_update,
         patch("webhook.merge_request.periodic_cleanup"),
     ):
@@ -187,6 +189,7 @@ async def test_multiple_messages_all_deleted_transactionally(mock_database, samp
         patch("webhook.merge_request.dbh.update_merge_request_ref_payload", return_value=sample_mri),
         patch("webhook.merge_request.dbh.get_merge_request_ref_infos", return_value=sample_mri),
         patch("webhook.merge_request.render"),
+        patch("webhook.merge_request.compute_mri_fingerprint", return_value="test-fp"),
         patch("webhook.merge_request.update_all_messages_transactional") as mock_update,
         patch("webhook.merge_request.periodic_cleanup"),
     ):
@@ -244,6 +247,7 @@ async def test_draft_to_ready_uses_transaction(mock_database, sample_merge_reque
         patch("webhook.merge_request.dbh.update_merge_request_ref_payload", return_value=sample_mri),
         patch("webhook.merge_request.dbh.get_merge_request_ref_infos", return_value=sample_mri),
         patch("webhook.merge_request.render"),
+        patch("webhook.merge_request.compute_mri_fingerprint", return_value="test-fp"),
         patch("webhook.merge_request.update_all_messages_transactional") as mock_update,
         patch("webhook.merge_request.periodic_cleanup"),
         patch("webhook.merge_request.get_or_create_message_refs") as mock_get_refs,
@@ -292,6 +296,7 @@ async def test_merge_with_no_messages_doesnt_delete_mr_ref(mock_database, sample
         patch("webhook.merge_request.dbh.update_merge_request_ref_payload", return_value=sample_mri),
         patch("webhook.merge_request.dbh.get_merge_request_ref_infos", return_value=sample_mri),
         patch("webhook.merge_request.render"),
+        patch("webhook.merge_request.compute_mri_fingerprint", return_value="test-fp"),
         patch("webhook.merge_request.update_all_messages_transactional") as mock_update,
         patch("webhook.merge_request.periodic_cleanup"),
     ):

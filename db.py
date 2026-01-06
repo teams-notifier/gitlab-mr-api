@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import asyncio
+import datetime
+import hashlib
 import json
 import urllib.parse
 
@@ -107,12 +109,22 @@ class EmojiEntry(BaseModel, extra="allow"):
     user: GitlabUser
 
 
+class DiscussionStats(BaseModel):
+    threads_total: int = 0
+    threads_resolved: int = 0
+    threads_unresolved: int = 0
+    comments_total: int = 0
+    comments_resolved: int = 0
+    comments_unresolved: int = 0
+
+
 class MergeRequestExtraState(BaseModel):
     version: int
     opener: GitlabUser
     approvers: dict[str, GitlabApprovals]
     pipeline_statuses: dict[str, PipelinePayload]
     emojis: dict[str, EmojiEntry]
+    discussion_stats: DiscussionStats | None = None
 
 
 class MergeRequestInfos(BaseModel):
@@ -120,6 +132,16 @@ class MergeRequestInfos(BaseModel):
     merge_request_payload: MergeRequestPayload
     merge_request_extra_state: MergeRequestExtraState
     head_pipeline_id: int | None
+
+
+def compute_mri_fingerprint(mri: MergeRequestInfos) -> str:
+    """Compute a stable fingerprint from MRI data for deduplication."""
+    datasource = {
+        "mri_payload": mri.merge_request_payload.model_dump(),
+        "mri_extra_state": mri.merge_request_extra_state.model_dump(),
+        "head_pipeline_id": mri.head_pipeline_id,
+    }
+    return hashlib.sha256(json.dumps(datasource, sort_keys=True, default=str).encode()).hexdigest()
 
 
 class DBHelper:
@@ -245,6 +267,27 @@ class DBHelper:
         assert isinstance(merge_ref, asyncpg.Record)
         return MergeRequestInfos(**merge_ref)
 
+    async def update_discussion_stats(
+        self, merge_request_ref_id: int, stats: "DiscussionStats"
+    ) -> MergeRequestExtraState:
+        """Update discussion_stats in merge_request_extra_state."""
+        connection: asyncpg.Connection
+        async with await database.acquire() as connection:
+            row = await connection.fetchrow(
+                """UPDATE merge_request_ref
+                   SET merge_request_extra_state = jsonb_set(
+                       merge_request_extra_state,
+                       '{discussion_stats}',
+                       $1::jsonb
+                   )
+                   WHERE merge_request_ref_id = $2
+                   RETURNING merge_request_extra_state""",
+                stats.model_dump(),
+                merge_request_ref_id,
+            )
+            assert row is not None
+            return MergeRequestExtraState(**row["merge_request_extra_state"])
+
     async def get_mri_from_url_pid_mriid(
         self,
         url: str,
@@ -368,6 +411,84 @@ class DBHelper:
         if len(extra_sel_cols) == 0:
             return row[identity_col]
         return row
+
+    async def any_message_needs_update(self, merge_request_ref_id: int, payload_fingerprint: str) -> bool:
+        """
+        Check if ANY message for an MR needs updating (pre-check for deduplication).
+
+        Returns True if at least one message hasn't been processed with the given fingerprint.
+        Used to skip expensive GitLab API calls when all messages are already up-to-date.
+        """
+        connection: asyncpg.Connection
+        async with await database.acquire() as connection:
+            row = await connection.fetchrow(
+                """SELECT EXISTS(
+                    SELECT 1 FROM merge_request_message_ref
+                    WHERE merge_request_ref_id = $1
+                      AND message_id IS NOT NULL
+                      AND (last_processed_fingerprint IS NULL
+                           OR last_processed_fingerprint != $2)
+                ) as needs_update""",
+                merge_request_ref_id,
+                payload_fingerprint,
+            )
+            return bool(row["needs_update"]) if row else False
+
+    async def upsert_pending_mr_refresh(
+        self,
+        merge_request_ref_id: int,
+        payload_type: str,
+        debounce_seconds: float = 2.0,
+    ) -> bool:
+        """
+        Insert or update a pending MR refresh entry.
+
+        Returns True if this is a new entry (first event), False if debounced (subsequent event).
+        On first event: immediate processing (process_after = now).
+        On subsequent: updates last_event_at and extends process_after by debounce_seconds.
+        """
+        connection: asyncpg.Connection
+        async with await database.acquire() as connection:
+            result: str = await connection.execute(
+                """INSERT INTO pending_mr_refresh
+                       (merge_request_ref_id, payload_type, first_event_at, last_event_at, process_after)
+                   VALUES ($1, $2, now(), now(), now())
+                   ON CONFLICT (merge_request_ref_id) DO UPDATE
+                       SET last_event_at = now(),
+                           process_after = now() + $3::interval""",
+                merge_request_ref_id,
+                payload_type,
+                datetime.timedelta(seconds=debounce_seconds),
+            )
+            return result == "INSERT 0 1"
+
+    async def get_pending_refreshes(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Get pending refreshes ready for processing."""
+        connection: asyncpg.Connection
+        async with await database.acquire() as connection:
+            rows = await connection.fetch(
+                """SELECT pmr.merge_request_ref_id, pmr.payload_type,
+                          pmr.first_event_at, pmr.last_event_at,
+                          mr.merge_request_payload, mr.merge_request_extra_state,
+                          mr.head_pipeline_id
+                   FROM pending_mr_refresh pmr
+                   JOIN merge_request_ref mr USING (merge_request_ref_id)
+                   WHERE pmr.process_after <= now()
+                   ORDER BY pmr.process_after
+                   LIMIT $1
+                   FOR UPDATE OF pmr SKIP LOCKED""",
+                limit,
+            )
+            return [dict(row) for row in rows]
+
+    async def delete_pending_refresh(self, merge_request_ref_id: int) -> None:
+        """Delete a pending refresh after processing."""
+        connection: asyncpg.Connection
+        async with await database.acquire() as connection:
+            await connection.execute(
+                "DELETE FROM pending_mr_refresh WHERE merge_request_ref_id = $1",
+                merge_request_ref_id,
+            )
 
 
 database = DatabaseLifecycleHandler(config)
