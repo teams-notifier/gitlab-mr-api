@@ -50,10 +50,6 @@ docker-compose*.yml
 build.sh
 push.sh
 
-# Database
-db/migrations/
-*.sql
-
 # Environment
 .env
 .env.local
