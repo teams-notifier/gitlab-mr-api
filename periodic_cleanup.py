@@ -66,14 +66,18 @@ async def _process_pending_refreshes() -> int:
                 f"on {mri.merge_request_payload.project.path_with_namespace}"
             )
 
-            event_updated_at: datetime.datetime = row["last_event_at"]
+            # Use GitLab's updated_at from stored payload (not local last_event_at)
+            # to keep timestamps comparable for OOO detection
+            payload_updated_at = datetime.datetime.fromisoformat(
+                mri.merge_request_payload.object_attributes.updated_at.replace(" UTC", "+00:00")
+            )
 
             messages_updated = await update_all_messages_transactional(
                 mri,
                 card,
                 summary,
                 datasource_fingerprint,
-                event_updated_at,
+                payload_updated_at,
                 row["payload_type"],
             )
 
