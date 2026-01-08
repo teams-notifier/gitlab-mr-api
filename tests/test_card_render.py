@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Tests for cards/render.py - YAML template rendering."""
 
+from typing import Any
+
 from cards.render import render
 from cards.render import yaml_escape_sq
+from db import DiscussionStats
 from db import GitlabUser
 from db import MergeRequestExtraState
 from db import MergeRequestInfos
@@ -21,6 +24,9 @@ def make_mri(
     assignees: list[GLUser] | None = None,
     reviewers: list[GLUser] | None = None,
     approvers: list[str] | None = None,
+    action: str = "open",
+    draft: bool = False,
+    discussion_stats: DiscussionStats | None = None,
 ) -> MergeRequestInfos:
     """Create a MergeRequestInfos for testing."""
     payload = MergeRequestPayload(
@@ -46,10 +52,10 @@ def make_mri(
             iid=1,
             title=title,
             created_at="2025-01-01 00:00:00 UTC",
-            draft=False,
+            draft=draft,
             state="opened",
             url="https://gitlab.example.com/test/project/-/merge_requests/1",
-            action="open",
+            action=action,
             updated_at="2025-01-01 00:00:00 UTC",
             detailed_merge_status="mergeable",
             head_pipeline_id=None,
@@ -70,6 +76,7 @@ def make_mri(
         approvers={},
         pipeline_statuses={},
         emojis={},
+        discussion_stats=discussion_stats,
     )
 
     if approvers:
@@ -215,3 +222,67 @@ class TestComputeMriFingerprint:
         fp = compute_mri_fingerprint(mri)
         assert len(fp) == 64
         assert all(c in "0123456789abcdef" for c in fp)
+
+
+def find_icon_color(card: dict[str, Any]) -> str | None:
+    """Find the icon color in the adaptive card body."""
+    for item in card.get("body", []):
+        if item.get("type") == "ColumnSet":
+            for col in item.get("columns", []):
+                for inner in col.get("items", []):
+                    if inner.get("type") == "Icon":
+                        color = inner.get("color")
+                        return str(color) if color is not None else None
+    return None
+
+
+class TestIconColor:
+    """Tests for icon color based on MR state and unresolved threads."""
+
+    def test_default_icon_color_no_discussion_stats(self):
+        """Icon should be accent when no discussion stats."""
+        mri = make_mri()
+        result = render(mri)
+        assert find_icon_color(result) == "accent"
+
+    def test_default_icon_color_no_unresolved_threads(self):
+        """Icon should be accent when all threads resolved."""
+        stats = DiscussionStats(threads_total=3, threads_resolved=3, threads_unresolved=0)
+        mri = make_mri(discussion_stats=stats)
+        result = render(mri)
+        assert find_icon_color(result) == "accent"
+
+    def test_warning_icon_color_with_unresolved_threads(self):
+        """Icon should be warning (orange) when there are unresolved threads."""
+        stats = DiscussionStats(threads_total=3, threads_resolved=1, threads_unresolved=2)
+        mri = make_mri(discussion_stats=stats)
+        result = render(mri)
+        assert find_icon_color(result) == "warning"
+
+    def test_closed_mr_keeps_attention_regardless_of_threads(self):
+        """Closed MR should keep attention color, not be overridden by thread status."""
+        stats = DiscussionStats(threads_total=3, threads_resolved=1, threads_unresolved=2)
+        mri = make_mri(action="close", discussion_stats=stats)
+        result = render(mri)
+        assert find_icon_color(result) == "attention"
+
+    def test_merged_mr_keeps_good_regardless_of_threads(self):
+        """Merged MR should keep good color, not be overridden by thread status."""
+        stats = DiscussionStats(threads_total=3, threads_resolved=1, threads_unresolved=2)
+        mri = make_mri(action="merge", discussion_stats=stats)
+        result = render(mri)
+        assert find_icon_color(result) == "good"
+
+    def test_draft_mr_with_unresolved_threads_shows_warning(self):
+        """Draft MR with unresolved threads should show warning color."""
+        stats = DiscussionStats(threads_total=2, threads_resolved=0, threads_unresolved=2)
+        mri = make_mri(draft=True, discussion_stats=stats)
+        result = render(mri)
+        assert find_icon_color(result) == "warning"
+
+    def test_draft_mr_without_unresolved_threads_shows_default(self):
+        """Draft MR without unresolved threads should show default color."""
+        stats = DiscussionStats(threads_total=2, threads_resolved=2, threads_unresolved=0)
+        mri = make_mri(draft=True, discussion_stats=stats)
+        result = render(mri)
+        assert find_icon_color(result) == "default"

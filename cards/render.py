@@ -101,6 +101,13 @@ def render(
 
     discussion_stats = mri.merge_request_extra_state.discussion_stats
 
+    if (
+        discussion_stats
+        and discussion_stats.threads_unresolved > 0
+        and mri.merge_request_payload.object_attributes.action not in ("close", "merge")
+    ):
+        icon_color = Teams_Color.WARNING
+
     precalc = {
         "path_with_namespace": mri.merge_request_payload.project.path_with_namespace,
         "iid": mri.merge_request_payload.object_attributes.iid,
