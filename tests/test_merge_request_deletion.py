@@ -35,7 +35,7 @@ async def test_merge_close_uses_transactional_update(mock_database, sample_merge
     sample_mri = AsyncMock(
         merge_request_ref_id=merge_request_ref_id,
         merge_request_payload=sample_merge_request_payload,
-        merge_request_extra_state=AsyncMock(opener=sample_merge_request_payload.user),
+        merge_request_extra_state=AsyncMock(opener=sample_merge_request_payload.user, discussion_stats=None),
     )
 
     with (
@@ -82,7 +82,7 @@ async def test_merge_close_transactional_rollback_on_failure(mock_database, samp
     sample_mri = AsyncMock(
         merge_request_ref_id=merge_request_ref_id,
         merge_request_payload=sample_merge_request_payload,
-        merge_request_extra_state=AsyncMock(opener=sample_merge_request_payload.user),
+        merge_request_extra_state=AsyncMock(opener=sample_merge_request_payload.user, discussion_stats=None),
     )
 
     with (
@@ -179,7 +179,7 @@ async def test_multiple_messages_all_deleted_transactionally(mock_database, samp
     sample_mri = AsyncMock(
         merge_request_ref_id=merge_request_ref_id,
         merge_request_payload=sample_merge_request_payload,
-        merge_request_extra_state=AsyncMock(opener=sample_merge_request_payload.user),
+        merge_request_extra_state=AsyncMock(opener=sample_merge_request_payload.user, discussion_stats=None),
     )
 
     with (
@@ -223,7 +223,7 @@ async def test_draft_to_ready_uses_transaction(mock_database, sample_merge_reque
     sample_merge_request_payload.changes = {"draft": {"previous": True, "current": False}}
 
     connection.fetch.return_value = [{"merge_request_message_ref_id": 1, "message_id": uuid.uuid4()}]
-    connection.fetchrow.return_value = {"merge_request_extra_state": {}}
+    connection.fetchrow.return_value = {"merge_request_extra_state": MagicMock(discussion_stats=None)}
 
     mock_ref = MRMessRef(
         merge_request_message_ref_id=1,
@@ -237,6 +237,7 @@ async def test_draft_to_ready_uses_transaction(mock_database, sample_merge_reque
         merge_request_extra_state=AsyncMock(
             opener=sample_merge_request_payload.user,
             approvers={},
+            discussion_stats=None,
         ),
     )
 
@@ -286,7 +287,7 @@ async def test_merge_with_no_messages_doesnt_delete_mr_ref(mock_database, sample
     sample_mri = AsyncMock(
         merge_request_ref_id=100,
         merge_request_payload=sample_merge_request_payload,
-        merge_request_extra_state=AsyncMock(opener=sample_merge_request_payload.user),
+        merge_request_extra_state=AsyncMock(opener=sample_merge_request_payload.user, discussion_stats=None),
     )
 
     with (

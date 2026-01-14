@@ -40,7 +40,7 @@ async def test_merge_creates_single_deletion_record(mock_database, sample_merge_
     sample_mri = AsyncMock(
         merge_request_ref_id=100,
         merge_request_payload=sample_merge_request_payload,
-        merge_request_extra_state=AsyncMock(opener=sample_merge_request_payload.user),
+        merge_request_extra_state=AsyncMock(opener=sample_merge_request_payload.user, discussion_stats=None),
     )
 
     with (
@@ -206,7 +206,7 @@ async def test_draft_transition_uses_for_update_lock(mock_database, sample_merge
     ]
 
     connection.fetch.return_value = messages
-    connection.fetchrow.return_value = {"merge_request_extra_state": {}}
+    connection.fetchrow.return_value = {"merge_request_extra_state": MagicMock(discussion_stats=None)}
 
     msg_ref = MRMessRef(
         merge_request_message_ref_id=1,
@@ -220,6 +220,7 @@ async def test_draft_transition_uses_for_update_lock(mock_database, sample_merge
         merge_request_extra_state=AsyncMock(
             opener=sample_merge_request_payload.user,
             approvers={},
+            discussion_stats=None,
         ),
     )
 
@@ -271,9 +272,10 @@ async def test_approval_updates_extra_state(mock_database, sample_merge_request_
     message_id = uuid.uuid4()
 
     connection.fetchrow.return_value = {
-        "merge_request_extra_state": {
-            "approvers": {"1": {"id": 1, "username": "user1", "status": "approved"}}
-        }
+        "merge_request_extra_state": MagicMock(
+            approvers={"1": {"id": 1, "username": "user1", "status": "approved"}},
+            discussion_stats=None,
+        )
     }
 
     msg_ref = MRMessRef(
@@ -288,6 +290,7 @@ async def test_approval_updates_extra_state(mock_database, sample_merge_request_
         merge_request_extra_state=AsyncMock(
             opener=sample_merge_request_payload.user,
             approvers={"1": {"id": 1, "username": "user1", "status": "approved"}},
+            discussion_stats=None,
         ),
     )
 

@@ -34,6 +34,7 @@ def make_mock_mri(payload, ref_id=1):
     mri.merge_request_extra_state = MagicMock()
     mri.merge_request_extra_state.opener = payload.user
     mri.merge_request_extra_state.approvers = {}
+    mri.merge_request_extra_state.discussion_stats = None
     return mri
 
 
@@ -258,7 +259,9 @@ async def test_mr_state_approved_updates_approvers(base_mr_payload, mock_databas
 
     connection = mock_database.connection
     connection.fetchrow.return_value = {
-        "merge_request_extra_state": {"approvers": {"1": {"id": 1, "status": "approved"}}}
+        "merge_request_extra_state": MagicMock(
+            approvers={"1": {"id": 1, "status": "approved"}}, discussion_stats=None
+        )
     }
 
     sample_mri = make_mock_mri(base_mr_payload)
@@ -314,7 +317,9 @@ async def test_mr_state_unapproved_updates_approvers(base_mr_payload, mock_datab
 
     connection = mock_database.connection
     connection.fetchrow.return_value = {
-        "merge_request_extra_state": {"approvers": {"1": {"id": 1, "status": "unapproved"}}}
+        "merge_request_extra_state": MagicMock(
+            approvers={"1": {"id": 1, "status": "unapproved"}}, discussion_stats=None
+        )
     }
 
     sample_mri = make_mock_mri(base_mr_payload)
@@ -370,7 +375,9 @@ async def test_mr_update_with_new_commits_resets_approvals(base_mr_payload, mock
     )
 
     connection = mock_database.connection
-    connection.fetchrow.return_value = {"merge_request_extra_state": {"approvers": {}}}
+    connection.fetchrow.return_value = {
+        "merge_request_extra_state": MagicMock(approvers={}, discussion_stats=None)
+    }
 
     sample_mri = make_mock_mri(base_mr_payload)
 
@@ -437,7 +444,7 @@ async def test_mr_draft_to_ready_deletes_old_messages(base_mr_payload, mock_data
             "message_id": msg_ref.message_id,
         }
     ]
-    connection.fetchrow.return_value = {"merge_request_extra_state": {}}
+    connection.fetchrow.return_value = {"merge_request_extra_state": MagicMock(discussion_stats=None)}
 
     sample_mri = make_mock_mri(base_mr_payload)
 
@@ -590,3 +597,137 @@ async def test_mr_update_existing_message_uses_patch(base_mr_payload, mock_datab
         assert mock_client.request.call_count == 1
         call_args = mock_client.request.call_args
         assert call_args[0][0] == "PATCH"
+
+
+@pytest.mark.asyncio
+async def test_threads_resolved_triggers_reemission(base_mr_payload, mock_database):
+    """Test that resolving all threads triggers message re-emission."""
+    base_mr_payload.object_attributes.action = "update"
+    base_mr_payload.object_attributes.state = "opened"
+    base_mr_payload.object_attributes.draft = False
+    base_mr_payload.object_attributes.updated_at = "2025-01-01T12:00:00Z"
+
+    conv_token = uuid.UUID("11111111-1111-1111-1111-111111111111")
+    msg_ref = MRMessRef(
+        merge_request_message_ref_id=1,
+        conversation_token=conv_token,
+        message_id=uuid.uuid4(),
+    )
+
+    connection = mock_database.connection
+    connection.fetch.return_value = [
+        {
+            "merge_request_message_ref_id": 1,
+            "conversation_token": conv_token,
+            "message_id": msg_ref.message_id,
+        }
+    ]
+
+    sample_mri = make_mock_mri(base_mr_payload)
+
+    call_count = [0]
+
+    def mock_has_unresolved(extra_state):
+        call_count[0] += 1
+        return call_count[0] == 1
+
+    with (
+        patch("webhook.merge_request.database", mock_database),
+        patch("webhook.messaging.database", mock_database),
+        patch("webhook.merge_request.dbh.get_or_create_merge_request_ref_id", return_value=1),
+        patch("webhook.merge_request.dbh.update_merge_request_ref_payload", return_value=sample_mri),
+        patch("webhook.merge_request.dbh.get_merge_request_ref_infos", return_value=sample_mri),
+        patch("webhook.merge_request.dbh.any_message_needs_update", return_value=True),
+        patch("webhook.merge_request.fetch_and_persist_discussion_stats", return_value=None),
+        patch("webhook.merge_request.has_unresolved_threads", side_effect=mock_has_unresolved),
+        patch("webhook.merge_request.render"),
+        patch("webhook.merge_request.compute_mri_fingerprint", return_value="test-fp"),
+        patch("webhook.merge_request.update_all_messages_transactional") as mock_update_transactional,
+        patch("webhook.merge_request.get_or_create_message_refs") as mock_get_or_create,
+        patch("webhook.merge_request.get_all_message_refs") as mock_get_all,
+        patch("webhook.merge_request.periodic_cleanup") as mock_cleanup,
+        patch("httpx.AsyncClient") as mock_client_class,
+    ):
+        mock_update_transactional.return_value = 1
+        mock_get_or_create.return_value = {str(conv_token): msg_ref}
+        mock_get_all.return_value = [msg_ref]
+
+        mock_client = AsyncMock()
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"message_id": str(msg_ref.message_id)}
+        mock_client.request = AsyncMock(return_value=mock_response)
+        mock_client_class.return_value.__aenter__.return_value = mock_client
+
+        from webhook.merge_request import merge_request
+
+        await merge_request(
+            mr=base_mr_payload,
+            conversation_tokens=[str(conv_token)],
+            participant_ids_filter=[],
+            new_commits_revoke_approvals=False,
+        )
+
+        assert mock_update_transactional.called
+        call_kwargs = mock_update_transactional.call_args[1]
+        assert call_kwargs["schedule_deletion"] is True
+        assert call_kwargs["deletion_delay"].total_seconds() == 0
+        assert "threads-resolved" in str(mock_update_transactional.call_args)
+
+        assert mock_cleanup.reschedule.called
+
+
+@pytest.mark.asyncio
+async def test_threads_not_resolved_no_reemission(base_mr_payload, mock_database):
+    """Test that keeping unresolved threads does not trigger re-emission."""
+    base_mr_payload.object_attributes.action = "update"
+    base_mr_payload.object_attributes.state = "opened"
+    base_mr_payload.object_attributes.draft = False
+    base_mr_payload.object_attributes.updated_at = "2025-01-01T12:00:00Z"
+
+    conv_token = uuid.UUID("11111111-1111-1111-1111-111111111111")
+    msg_ref = MRMessRef(
+        merge_request_message_ref_id=1,
+        conversation_token=conv_token,
+        message_id=uuid.uuid4(),
+    )
+
+    sample_mri = make_mock_mri(base_mr_payload)
+
+    with (
+        patch("webhook.merge_request.database", mock_database),
+        patch("webhook.messaging.database", mock_database),
+        patch("webhook.merge_request.dbh.get_or_create_merge_request_ref_id", return_value=1),
+        patch("webhook.merge_request.dbh.update_merge_request_ref_payload", return_value=sample_mri),
+        patch("webhook.merge_request.dbh.get_merge_request_ref_infos", return_value=sample_mri),
+        patch("webhook.merge_request.dbh.any_message_needs_update", return_value=False),
+        patch("webhook.merge_request.has_unresolved_threads", return_value=True),
+        patch("webhook.merge_request.render"),
+        patch("webhook.merge_request.compute_mri_fingerprint", return_value="test-fp"),
+        patch("webhook.merge_request.update_all_messages_transactional") as mock_update_transactional,
+        patch("webhook.merge_request.get_or_create_message_refs") as mock_get_or_create,
+        patch("webhook.merge_request.get_all_message_refs") as mock_get_all,
+        patch("httpx.AsyncClient") as mock_client_class,
+    ):
+        mock_get_or_create.return_value = {str(conv_token): msg_ref}
+        mock_get_all.return_value = [msg_ref]
+
+        mock_client = AsyncMock()
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"message_id": str(msg_ref.message_id)}
+        mock_client.request = AsyncMock(return_value=mock_response)
+        mock_client_class.return_value.__aenter__.return_value = mock_client
+
+        from webhook.merge_request import merge_request
+
+        await merge_request(
+            mr=base_mr_payload,
+            conversation_tokens=[str(conv_token)],
+            participant_ids_filter=[],
+            new_commits_revoke_approvals=False,
+        )
+
+        # Transactional update may or may not be called, but never for "threads-resolved"
+        if mock_update_transactional.called:
+            assert "threads-resolved" not in str(mock_update_transactional.call_args)

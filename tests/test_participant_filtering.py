@@ -44,6 +44,7 @@ def make_mock_mri(payload, ref_id=1):
     mri.merge_request_extra_state = MagicMock()
     mri.merge_request_extra_state.opener = payload.user
     mri.merge_request_extra_state.approvers = {}
+    mri.merge_request_extra_state.discussion_stats = None
     return mri
 
 

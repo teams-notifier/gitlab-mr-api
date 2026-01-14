@@ -12,6 +12,8 @@ from db import DatabaseLifecycleHandler
 from db import MergeRequestInfos
 from db import compute_mri_fingerprint
 from db import dbh
+from db import has_unresolved_threads
+from db import make_mr_summary
 from gitlab_api import fetch_and_persist_discussion_stats
 from webhook.messaging import update_all_messages_transactional
 
@@ -44,6 +46,8 @@ async def _process_pending_refreshes() -> int:
                 head_pipeline_id=row["head_pipeline_id"],
             )
 
+            had_unresolved_threads = has_unresolved_threads(mri.merge_request_extra_state)
+
             updated_extra_state = await fetch_and_persist_discussion_stats(
                 merge_request_ref_id=mri.merge_request_ref_id,
                 project_url=mri.merge_request_payload.project.web_url,
@@ -53,18 +57,9 @@ async def _process_pending_refreshes() -> int:
             if updated_extra_state is not None:
                 mri.merge_request_extra_state = updated_extra_state
 
-            should_be_collapsed: bool = (
-                mri.merge_request_payload.object_attributes.draft
-                or mri.merge_request_payload.object_attributes.work_in_progress
-                or mri.merge_request_payload.object_attributes.state in ("closed", "merged")
-            )
-            card = render(mri, collapsed=should_be_collapsed, show_collapsible=should_be_collapsed)
-            datasource_fingerprint = compute_mri_fingerprint(mri)
-            summary = (
-                f"MR {mri.merge_request_payload.object_attributes.state}:"
-                f" {mri.merge_request_payload.object_attributes.title}\n"
-                f"on {mri.merge_request_payload.project.path_with_namespace}"
-            )
+            now_has_unresolved_threads = has_unresolved_threads(mri.merge_request_extra_state)
+
+            is_closing_state = mri.merge_request_payload.object_attributes.state in ("closed", "merged")
 
             # Use GitLab's updated_at from stored payload (not local last_event_at)
             # to keep timestamps comparable for OOO detection
@@ -72,10 +67,42 @@ async def _process_pending_refreshes() -> int:
                 mri.merge_request_payload.object_attributes.updated_at.replace(" UTC", "+00:00")
             )
 
+            if had_unresolved_threads and not now_has_unresolved_threads and not is_closing_state:
+                datasource_fingerprint = compute_mri_fingerprint(mri)
+                temp_card = render(mri, collapsed=False, show_collapsible=False)
+                await update_all_messages_transactional(
+                    mri,
+                    temp_card,
+                    make_mr_summary(mri),
+                    datasource_fingerprint,
+                    payload_updated_at,
+                    "threads-resolved",
+                    schedule_deletion=True,
+                    deletion_delay=datetime.timedelta(seconds=0),
+                )
+                await dbh.delete_pending_refresh(mri.merge_request_ref_id)
+                processed += 1
+                logger.info(
+                    "pending refresh processed - threads resolved, message re-emitted",
+                    merge_request_ref_id=mri.merge_request_ref_id,
+                    payload_type=row["payload_type"],
+                    fingerprint=datasource_fingerprint[:16],
+                )
+                continue
+
+            should_be_collapsed: bool = (
+                mri.merge_request_payload.object_attributes.draft
+                or mri.merge_request_payload.object_attributes.work_in_progress
+                or is_closing_state
+                or now_has_unresolved_threads
+            )
+            card = render(mri, collapsed=should_be_collapsed, show_collapsible=should_be_collapsed)
+            datasource_fingerprint = compute_mri_fingerprint(mri)
+
             messages_updated = await update_all_messages_transactional(
                 mri,
                 card,
-                summary,
+                make_mr_summary(mri),
                 datasource_fingerprint,
                 payload_updated_at,
                 row["payload_type"],

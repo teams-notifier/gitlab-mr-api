@@ -55,6 +55,7 @@ def sample_mri():
     mri.merge_request_payload.assignees = []
     mri.merge_request_payload.reviewers = []
     mri.merge_request_extra_state.opener.id = 1
+    mri.merge_request_extra_state.discussion_stats = None
     return mri
 
 
@@ -251,7 +252,9 @@ class TestMergeRequestUpdate:
         sample_mr_payload.object_attributes.head_pipeline_id = 999
         mock_ref = make_mock_ref("token1", message_id=uuid.uuid4())
 
-        mock_database.connection.fetchrow.return_value = {"merge_request_extra_state": {}}
+        mock_database.connection.fetchrow.return_value = {
+            "merge_request_extra_state": MagicMock(discussion_stats=None)
+        }
 
         with (
             patch("webhook.merge_request.dbh.get_or_create_merge_request_ref_id", return_value=1),
@@ -291,7 +294,9 @@ class TestMergeRequestUpdate:
         sample_mr_payload.object_attributes.oldrev = "abc123"
         mock_ref = make_mock_ref("token1", message_id=uuid.uuid4())
 
-        mock_database.connection.fetchrow.return_value = {"merge_request_extra_state": {}}
+        mock_database.connection.fetchrow.return_value = {
+            "merge_request_extra_state": MagicMock(discussion_stats=None)
+        }
 
         with (
             patch("webhook.merge_request.dbh.get_or_create_merge_request_ref_id", return_value=1),
@@ -333,7 +338,9 @@ class TestMergeRequestUpdate:
         sample_mr_payload.changes = {"draft": {"previous": True, "current": False}}
         new_mock_ref = make_mock_ref("token1", message_id=None)
 
-        mock_database.connection.fetchrow.return_value = {"merge_request_extra_state": {}}
+        mock_database.connection.fetchrow.return_value = {
+            "merge_request_extra_state": MagicMock(discussion_stats=None)
+        }
 
         with (
             patch("webhook.merge_request.dbh.get_or_create_merge_request_ref_id", return_value=1),

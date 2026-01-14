@@ -127,6 +127,11 @@ class MergeRequestExtraState(BaseModel):
     discussion_stats: DiscussionStats | None = None
 
 
+def has_unresolved_threads(extra_state: MergeRequestExtraState) -> bool:
+    """Check if extra_state has unresolved threads."""
+    return extra_state.discussion_stats is not None and extra_state.discussion_stats.threads_unresolved > 0
+
+
 class MergeRequestInfos(BaseModel):
     merge_request_ref_id: int
     merge_request_payload: MergeRequestPayload
@@ -142,6 +147,15 @@ def compute_mri_fingerprint(mri: MergeRequestInfos) -> str:
         "head_pipeline_id": mri.head_pipeline_id,
     }
     return hashlib.sha256(json.dumps(datasource, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def make_mr_summary(mri: MergeRequestInfos) -> str:
+    """Create a summary string for Teams message fallback."""
+    return (
+        f"MR {mri.merge_request_payload.object_attributes.state}:"
+        f" {mri.merge_request_payload.object_attributes.title}\n"
+        f"on {mri.merge_request_payload.project.path_with_namespace}"
+    )
 
 
 class DBHelper:
