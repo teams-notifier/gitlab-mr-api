@@ -12,6 +12,8 @@ from config import config
 from db import compute_mri_fingerprint
 from db import database
 from db import dbh
+from db import has_unresolved_threads
+from db import make_mr_summary
 from gitlab_api import fetch_and_persist_discussion_stats
 from gitlab_model import MergeRequestPayload
 from webhook.messaging import create_or_update_message
@@ -132,11 +134,7 @@ async def merge_request(
                 temp_mri = await dbh.get_merge_request_ref_infos(mr)
                 temp_card = render(temp_mri, collapsed=False, show_collapsible=False)
                 temp_fingerprint = compute_mri_fingerprint(temp_mri)
-                temp_summary = (
-                    f"MR {temp_mri.merge_request_payload.object_attributes.state}:"
-                    f" {temp_mri.merge_request_payload.object_attributes.title}\n"
-                    f"on {temp_mri.merge_request_payload.project.path_with_namespace}"
-                )
+                temp_summary = make_mr_summary(temp_mri)
 
                 await update_all_messages_transactional(
                     temp_mri,
@@ -168,6 +166,8 @@ async def merge_request(
     mri = await dbh.get_merge_request_ref_infos(mr)
     datasource_fingerprint = compute_mri_fingerprint(mri)
 
+    had_unresolved_threads = has_unresolved_threads(mri.merge_request_extra_state)
+
     if await dbh.any_message_needs_update(mri.merge_request_ref_id, datasource_fingerprint):
         updated_extra_state = await fetch_and_persist_discussion_stats(
             merge_request_ref_id=mri.merge_request_ref_id,
@@ -179,21 +179,30 @@ async def merge_request(
             mri.merge_request_extra_state = updated_extra_state
             datasource_fingerprint = compute_mri_fingerprint(mri)
 
+    now_has_unresolved_threads = has_unresolved_threads(mri.merge_request_extra_state)
+
+    if had_unresolved_threads and not now_has_unresolved_threads and not is_closing_action:
+        temp_card = render(mri, collapsed=False, show_collapsible=False)
+        await update_all_messages_transactional(
+            mri,
+            temp_card,
+            make_mr_summary(mri),
+            datasource_fingerprint,
+            payload_updated_at,
+            "threads-resolved",
+            schedule_deletion=True,
+            deletion_delay=datetime.timedelta(seconds=0),
+        )
+        need_cleanup_reschedule = True
+
     should_be_collapsed: bool = (
         mr.object_attributes.draft
         or mr.object_attributes.work_in_progress
-        or mr.object_attributes.state
-        in (
-            "closed",
-            "merged",
-        )
+        or mr.object_attributes.state in ("closed", "merged")
+        or now_has_unresolved_threads
     )
     card = render(mri, collapsed=should_be_collapsed, show_collapsible=should_be_collapsed)
-    summary = (
-        f"MR {mri.merge_request_payload.object_attributes.state}:"
-        f" {mri.merge_request_payload.object_attributes.title}\n"
-        f"on {mri.merge_request_payload.project.path_with_namespace}"
-    )
+    summary = make_mr_summary(mri)
 
     if is_closing_action:
         await update_all_messages_transactional(

@@ -123,6 +123,7 @@ async def test_webhook_endpoint_merge_request_open(
         merge_request_extra_state=MagicMock(
             opener=MagicMock(id=1),
             approvers={},
+            discussion_stats=None,
         ),
     )
 
@@ -180,6 +181,7 @@ async def test_webhook_endpoint_merge_request_merge(
         merge_request_extra_state=MagicMock(
             opener=MagicMock(id=1),
             approvers={},
+            discussion_stats=None,
         ),
     )
 
@@ -268,6 +270,7 @@ async def test_webhook_endpoint_invalid_conversation_token(
         merge_request_extra_state=MagicMock(
             opener=MagicMock(id=1),
             approvers={},
+            discussion_stats=None,
         ),
     )
 
@@ -316,6 +319,7 @@ async def test_webhook_endpoint_multiple_conversation_tokens(
         merge_request_extra_state=MagicMock(
             opener=MagicMock(id=1),
             approvers={},
+            discussion_stats=None,
         ),
     )
 
@@ -365,6 +369,7 @@ async def test_webhook_endpoint_activity_api_error(
         merge_request_extra_state=MagicMock(
             opener=MagicMock(id=1),
             approvers={},
+            discussion_stats=None,
         ),
     )
 

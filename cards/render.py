@@ -107,6 +107,7 @@ def render(
         and mri.merge_request_payload.object_attributes.action not in ("close", "merge")
     ):
         icon_color = Teams_Color.WARNING
+        icon_name = "CommentError"
 
     precalc = {
         "path_with_namespace": mri.merge_request_payload.project.path_with_namespace,

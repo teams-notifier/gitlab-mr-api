@@ -19,6 +19,7 @@ body:
     - details
     - showMore
     - showLess
+    - threadsCollapsed
   columns:
   - type: Column
     verticalContentAlignment: Center
@@ -58,6 +59,15 @@ body:
       - details
       - showMore
       - showLess
+      - threadsCollapsed
+{% if precalc.discussion_stats and precalc.discussion_stats.threads_unresolved > 0 %}
+- type: TextBlock
+  id: threadsCollapsed
+  isVisible: {{ collapsed }}
+  spacing: Small
+  text: '**Threads** {{ precalc.discussion_stats.threads_resolved }}/{{ precalc.discussion_stats.threads_total }} resolved'
+  color: Warning
+{% endif %}
 - type: RichTextBlock
   id: showMore
   isVisible: {{ collapsed }}
@@ -72,6 +82,7 @@ body:
       - details
       - showMore
       - showLess
+      - threadsCollapsed
 {% endif %}
 
 - type: Container

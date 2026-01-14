@@ -236,53 +236,109 @@ def find_icon_color(card: dict[str, Any]) -> str | None:
     return None
 
 
-class TestIconColor:
-    """Tests for icon color based on MR state and unresolved threads."""
+def find_icon_name(card: dict[str, Any]) -> str | None:
+    """Find the icon name in the adaptive card body."""
+    for item in card.get("body", []):
+        if item.get("type") == "ColumnSet":
+            for col in item.get("columns", []):
+                for inner in col.get("items", []):
+                    if inner.get("type") == "Icon":
+                        name = inner.get("name")
+                        return str(name) if name is not None else None
+    return None
 
-    def test_default_icon_color_no_discussion_stats(self):
-        """Icon should be accent when no discussion stats."""
+
+class TestIconColorAndName:
+    """Tests for icon color and name based on MR state and unresolved threads."""
+
+    def test_default_icon_no_discussion_stats(self):
+        """Icon should be BranchRequest with accent color when no discussion stats."""
         mri = make_mri()
         result = render(mri)
         assert find_icon_color(result) == "accent"
+        assert find_icon_name(result) == "BranchRequest"
 
-    def test_default_icon_color_no_unresolved_threads(self):
-        """Icon should be accent when all threads resolved."""
+    def test_default_icon_no_unresolved_threads(self):
+        """Icon should be BranchRequest with accent color when all threads resolved."""
         stats = DiscussionStats(threads_total=3, threads_resolved=3, threads_unresolved=0)
         mri = make_mri(discussion_stats=stats)
         result = render(mri)
         assert find_icon_color(result) == "accent"
+        assert find_icon_name(result) == "BranchRequest"
 
-    def test_warning_icon_color_with_unresolved_threads(self):
-        """Icon should be warning (orange) when there are unresolved threads."""
+    def test_chatbubbles_icon_with_unresolved_threads(self):
+        """Icon should be CommentError with warning color when unresolved threads."""
         stats = DiscussionStats(threads_total=3, threads_resolved=1, threads_unresolved=2)
         mri = make_mri(discussion_stats=stats)
         result = render(mri)
         assert find_icon_color(result) == "warning"
+        assert find_icon_name(result) == "CommentError"
 
     def test_closed_mr_keeps_attention_regardless_of_threads(self):
-        """Closed MR should keep attention color, not be overridden by thread status."""
+        """Closed MR should keep CodeTextOff icon with attention color."""
         stats = DiscussionStats(threads_total=3, threads_resolved=1, threads_unresolved=2)
         mri = make_mri(action="close", discussion_stats=stats)
         result = render(mri)
         assert find_icon_color(result) == "attention"
+        assert find_icon_name(result) == "CodeTextOff"
 
     def test_merged_mr_keeps_good_regardless_of_threads(self):
-        """Merged MR should keep good color, not be overridden by thread status."""
+        """Merged MR should keep Merge icon with good color."""
         stats = DiscussionStats(threads_total=3, threads_resolved=1, threads_unresolved=2)
         mri = make_mri(action="merge", discussion_stats=stats)
         result = render(mri)
         assert find_icon_color(result) == "good"
+        assert find_icon_name(result) == "Merge"
 
-    def test_draft_mr_with_unresolved_threads_shows_warning(self):
-        """Draft MR with unresolved threads should show warning color."""
+    def test_draft_mr_with_unresolved_threads_shows_chatbubbles(self):
+        """Draft MR with unresolved threads should show CommentError with warning."""
         stats = DiscussionStats(threads_total=2, threads_resolved=0, threads_unresolved=2)
         mri = make_mri(draft=True, discussion_stats=stats)
         result = render(mri)
         assert find_icon_color(result) == "warning"
+        assert find_icon_name(result) == "CommentError"
 
-    def test_draft_mr_without_unresolved_threads_shows_default(self):
-        """Draft MR without unresolved threads should show default color."""
+    def test_draft_mr_without_unresolved_threads_shows_drafts(self):
+        """Draft MR without unresolved threads should show Drafts icon with default color."""
         stats = DiscussionStats(threads_total=2, threads_resolved=2, threads_unresolved=0)
         mri = make_mri(draft=True, discussion_stats=stats)
         result = render(mri)
         assert find_icon_color(result) == "default"
+        assert find_icon_name(result) == "Drafts"
+
+
+def find_thread_count_block(card: dict[str, Any]) -> dict[str, Any] | None:
+    """Find the threadsCollapsed TextBlock in the card body."""
+    for item in card.get("body", []):
+        if item.get("type") == "TextBlock" and item.get("id") == "threadsCollapsed":
+            return dict(item)
+    return None
+
+
+class TestCollapsedWithThreads:
+    """Tests for collapsed state showing thread count."""
+
+    def test_collapsed_with_threads_shows_thread_count(self):
+        """Collapsed card with unresolved threads should show 'Threads X/Y resolved' on separate line."""
+        stats = DiscussionStats(threads_total=5, threads_resolved=2, threads_unresolved=3)
+        mri = make_mri(discussion_stats=stats)
+        result = render(mri, collapsed=True, show_collapsible=True)
+        thread_block = find_thread_count_block(result)
+        assert thread_block is not None
+        assert "2/5 resolved" in thread_block.get("text", "")
+        assert thread_block.get("color") == "Warning"
+
+    def test_collapsed_without_threads_no_thread_count(self):
+        """Collapsed card without unresolved threads should not show thread count block."""
+        stats = DiscussionStats(threads_total=3, threads_resolved=3, threads_unresolved=0)
+        mri = make_mri(discussion_stats=stats)
+        result = render(mri, collapsed=True, show_collapsible=True)
+        thread_block = find_thread_count_block(result)
+        assert thread_block is None
+
+    def test_collapsed_draft_no_thread_count(self):
+        """Collapsed draft without threads should not show thread count block."""
+        mri = make_mri(draft=True)
+        result = render(mri, collapsed=True, show_collapsible=True)
+        thread_block = find_thread_count_block(result)
+        assert thread_block is None
