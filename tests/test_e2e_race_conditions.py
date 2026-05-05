@@ -1005,9 +1005,9 @@ async def test_e2e_race_close_after_reopen_ooo(
 
     # Timestamp should still be from reopen (March), not close (February)
     final_updated_at = msg_refs_final[0]["last_processed_updated_at"]
-    assert final_updated_at == datetime.datetime(
-        2025, 3, 1, 0, 0, 0, tzinfo=datetime.UTC
-    ), f"Timestamp should be from reopen (March), not close. Got {final_updated_at}"
+    assert final_updated_at == datetime.datetime(2025, 3, 1, 0, 0, 0, tzinfo=datetime.UTC), (
+        f"Timestamp should be from reopen (March), not close. Got {final_updated_at}"
+    )
 
     # Close should have returned early (None result indicates early return)
     assert result is None, "Close should have been rejected and returned early"
@@ -1124,6 +1124,6 @@ async def test_e2e_race_update_arrives_before_open_with_older_timestamp(
     # Verify timestamp is from the newer event (Open with T1)
     final_updated_at = msg_refs[0]["last_processed_updated_at"]
     expected_ts = datetime.datetime(2025, 12, 22, 9, 7, 23, tzinfo=datetime.UTC)
-    assert (
-        final_updated_at == expected_ts
-    ), f"Timestamp should be from Open event (09:07:23). Got {final_updated_at}"
+    assert final_updated_at == expected_ts, (
+        f"Timestamp should be from Open event (09:07:23). Got {final_updated_at}"
+    )

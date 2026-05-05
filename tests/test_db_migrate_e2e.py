@@ -126,11 +126,11 @@ class TestMigrateE2E:
             """)
             column_names = {row["column_name"] for row in columns}
 
-            assert (
-                "last_processed_fingerprint" in column_names
-            ), "Column from migration 20250121010000 should exist"
-            assert (
-                "last_processed_updated_at" in column_names
-            ), "Column from migration 20251210000000 should exist"
+            assert "last_processed_fingerprint" in column_names, (
+                "Column from migration 20250121010000 should exist"
+            )
+            assert "last_processed_updated_at" in column_names, (
+                "Column from migration 20251210000000 should exist"
+            )
         finally:
             await conn.close()
