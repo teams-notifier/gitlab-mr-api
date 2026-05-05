@@ -15,6 +15,7 @@ from config import config
 
 if TYPE_CHECKING:
     from db import MergeRequestExtraState
+    from db import MergeRequestInfos
 
 logger = fastapi_structured_logging.get_logger()
 
@@ -173,6 +174,84 @@ async def _fetch_mr_discussion_stats(
             "gitlab api error",
             token_name=api_token.name,
             api_url=base_url,
+            project_id=project_id,
+            mr_iid=mr_iid,
+            error=str(e),
+        )
+        return None
+
+
+async def fetch_and_refresh_mr_status(
+    merge_request_ref_id: int,
+    project_url: str,
+    project_id: int,
+    mr_iid: int,
+) -> MergeRequestInfos | None:
+    """
+    Fetch current MR status from GitLab API and update stored payload.
+
+    Syncs state, title, draft, merge status, branches, and pipeline ID.
+    Returns updated MergeRequestInfos or None if API unavailable
+    (token missing, HTTP failure, or transient error).
+    Callers should treat None as "could not verify" — distinct from
+    "API confirmed MR still open".
+    """
+    api_data = await _fetch_mr_status(project_url, project_id, mr_iid)
+    if api_data is None:
+        return None
+
+    from db import dbh
+
+    return await dbh.refresh_mr_payload_from_api(merge_request_ref_id, api_data)
+
+
+async def _fetch_mr_status(
+    project_url: str,
+    project_id: int,
+    mr_iid: int,
+) -> dict[str, Any] | None:
+    """Fetch single MR from GitLab API. Returns None if token not configured or error."""
+    api_token = config.get_gitlab_api_token(project_url)
+    if api_token is None:
+        logger.debug("no gitlab api token configured for project", project_url=project_url)
+        return None
+
+    encoded_project_id = quote(str(project_id), safe="")
+    url = f"{api_token.url.rstrip('/')}/api/v4/projects/{encoded_project_id}/merge_requests/{mr_iid}"
+
+    try:
+        timeout = httpx.Timeout(5.0, connect=2.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.get(
+                url,
+                headers={"PRIVATE-TOKEN": api_token.token},
+            )
+            response.raise_for_status()
+            data: dict[str, Any] = response.json()
+            logger.info(
+                "fetched mr status from api",
+                project_id=project_id,
+                mr_iid=mr_iid,
+                state=data.get("state"),
+                draft=data.get("draft"),
+                detailed_merge_status=data.get("detailed_merge_status"),
+            )
+            return data
+    except httpx.HTTPStatusError as e:
+        logger.warning(
+            "gitlab api http error fetching mr status",
+            token_name=api_token.name,
+            api_url=url,
+            project_id=project_id,
+            mr_iid=mr_iid,
+            status_code=e.response.status_code,
+        )
+        return None
+    except Exception as e:
+        logger.warning(
+            "gitlab api error fetching mr status",
+            token_name=api_token.name,
+            api_url=url,
             project_id=project_id,
             mr_iid=mr_iid,
             error=str(e),

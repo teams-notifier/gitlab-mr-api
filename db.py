@@ -410,7 +410,7 @@ class DBHelper:
                         INSERT INTO "{table}" (
                             {", ".join(ins_col)}
                         ) VALUES (
-                            {", ".join(["$"+str(i+1) for i in range(len(ins_col))])}
+                            {", ".join(["$" + str(i + 1) for i in range(len(ins_col))])}
                         ) RETURNING {", ".join(sel_cols)}
                         """,
                         *ins_args,
@@ -494,6 +494,108 @@ class DBHelper:
                 limit,
             )
             return [dict(row) for row in rows]
+
+    async def refresh_mr_payload_from_api(
+        self, merge_request_ref_id: int, api_data: dict[str, Any]
+    ) -> MergeRequestInfos:
+        """Update stored MR payload with fresh state from GitLab API.
+
+        Syncs state, title, draft, merge status, branches, and pipeline ID.
+        Assignees/reviewers are not updated (API response lacks email field required by GLUser).
+        """
+        connection: asyncpg.Connection
+        async with await database.acquire() as connection:
+            async with connection.transaction():
+                row = await connection.fetchrow(
+                    """SELECT merge_request_ref_id, merge_request_payload,
+                              merge_request_extra_state, head_pipeline_id
+                       FROM merge_request_ref
+                       WHERE merge_request_ref_id = $1
+                       FOR UPDATE""",
+                    merge_request_ref_id,
+                )
+                assert row is not None
+
+                payload = row["merge_request_payload"]
+                oa = payload.get("object_attributes", {})
+
+                for field in (
+                    "state",
+                    "title",
+                    "draft",
+                    "detailed_merge_status",
+                    "source_branch",
+                    "target_branch",
+                ):
+                    if field in api_data:
+                        oa[field] = api_data[field]
+
+                # GitLab REST API returns updated_at as ISO 8601 ("...Z");
+                # webhook payloads use "YYYY-MM-DD HH:MM:SS UTC". Normalize
+                # to webhook format so downstream fromisoformat parsing
+                # (with the " UTC" -> "+00:00" replace) keeps working.
+                # Defensive: if GitLab ever returns a naive datetime (no
+                # offset), assume UTC rather than letting astimezone() apply
+                # the host's local TZ. If parsing fails outright, log and
+                # keep the stored value — never raise here, otherwise the
+                # whole pending_mr_refresh row gets stuck retrying forever.
+                if "updated_at" in api_data and api_data["updated_at"]:
+                    raw = api_data["updated_at"]
+                    try:
+                        parsed = datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                        if parsed.tzinfo is None:
+                            parsed = parsed.replace(tzinfo=datetime.UTC)
+                        oa["updated_at"] = parsed.astimezone(datetime.UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+                    except (ValueError, TypeError) as exc:
+                        log.warning(
+                            "could not parse api updated_at, keeping stored value",
+                            merge_request_ref_id=merge_request_ref_id,
+                            raw=raw,
+                            error=str(exc),
+                        )
+
+                if "draft" in api_data:
+                    oa["work_in_progress"] = api_data["draft"]
+
+                # Synthesize `action` from state so cards/render.py picks the
+                # right icon (CodeTextOff for close, Merge for merge). The
+                # renderer keys off action, not state, so we MUST set it.
+                # Only mutate on terminal/reopen transitions; otherwise keep
+                # the webhook-recorded action to avoid masking real events.
+                api_state = api_data.get("state")
+                if api_state == "merged" and oa.get("action") != "merge":
+                    oa["action"] = "merge"
+                elif api_state == "closed" and oa.get("action") != "close":
+                    oa["action"] = "close"
+                elif api_state == "opened" and oa.get("action") in ("close", "merge"):
+                    oa["action"] = "reopen"
+
+                head_pipeline_id = row["head_pipeline_id"]
+                api_pipeline = api_data.get("head_pipeline")
+                if api_pipeline and api_pipeline.get("id"):
+                    oa["head_pipeline_id"] = api_pipeline["id"]
+                    head_pipeline_id = api_pipeline["id"]
+
+                payload["object_attributes"] = oa
+
+                await connection.execute(
+                    """UPDATE merge_request_ref
+                       SET merge_request_payload = $1, head_pipeline_id = $2
+                       WHERE merge_request_ref_id = $3""",
+                    payload,
+                    head_pipeline_id,
+                    merge_request_ref_id,
+                )
+
+        # extra_state is read from the pre-update `row` snapshot. Safe today
+        # because this function does not mutate extra_state; if that ever
+        # changes, re-read it after the UPDATE or RETURNING it.
+        return MergeRequestInfos(
+            merge_request_ref_id=merge_request_ref_id,
+            merge_request_payload=payload,
+            merge_request_extra_state=row["merge_request_extra_state"],
+            head_pipeline_id=head_pipeline_id,
+        )
 
     async def delete_pending_refresh(self, merge_request_ref_id: int) -> None:
         """Delete a pending refresh after processing."""
