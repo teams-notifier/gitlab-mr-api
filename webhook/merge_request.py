@@ -273,6 +273,8 @@ async def merge_request(
                                 )
                                 or not participant_found
                             ),
+                            project_id=mr.object_attributes.target_project_id,
+                            mr_iid=mr.object_attributes.iid,
                         )
 
                         if mrmsgref.message_id is not None:
@@ -308,6 +310,8 @@ async def merge_request(
                                             summary,
                                             datasource_fingerprint,
                                             payload_updated_at,
+                                            project_id=mr.object_attributes.target_project_id,
+                                            mr_iid=mr.object_attributes.iid,
                                         )
                     else:
                         await update_message_with_fingerprint(
@@ -317,6 +321,8 @@ async def merge_request(
                             summary,
                             datasource_fingerprint,
                             payload_updated_at,
+                            project_id=mr.object_attributes.target_project_id,
+                            mr_iid=mr.object_attributes.iid,
                         )
                     messages_processed += 1
                 except Exception:

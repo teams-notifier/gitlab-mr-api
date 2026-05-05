@@ -128,6 +128,8 @@ async def create_or_update_message(
     card: dict[str, Any] | None = None,
     summary: str | None = None,
     update_only: bool = False,
+    project_id: int | None = None,
+    mr_iid: int | None = None,
 ) -> uuid.UUID | None:
     payload: dict[str, Any]
     if message_text:
@@ -157,6 +159,8 @@ async def create_or_update_message(
                 url=config.ACTIVITY_API + "api/v1/message",
                 conversation_token=str(mrmsgref.conversation_token),
                 status_code=res.status_code if "res" in locals() else None,
+                project_id=project_id,
+                mr_iid=mr_iid,
                 exc_info=True,
             )
             raise
@@ -207,6 +211,8 @@ async def create_or_update_message(
                 url=config.ACTIVITY_API + "api/v1/message",
                 message_id=str(mrmsgref.message_id),
                 status_code=res.status_code if "res" in locals() else None,
+                project_id=project_id,
+                mr_iid=mr_iid,
                 exc_info=True,
             )
             raise
@@ -220,6 +226,9 @@ async def update_message_with_fingerprint(
     summary: str | None,
     payload_fingerprint: str,
     payload_updated_at: datetime.datetime,
+    *,
+    project_id: int | None = None,
+    mr_iid: int | None = None,
 ) -> None:
     """
     Update an existing message via Teams API and store the fingerprint.
@@ -266,6 +275,8 @@ async def update_message_with_fingerprint(
                 "message update skipped - newer timestamp already stored (race)",
                 message_id=str(mrmsgref.message_id),
                 payload_updated_at=payload_updated_at.isoformat(),
+                project_id=project_id,
+                mr_iid=mr_iid,
             )
         else:
             logger.debug(
@@ -281,6 +292,8 @@ async def update_message_with_fingerprint(
             url=config.ACTIVITY_API + "api/v1/message",
             message_id=str(mrmsgref.message_id),
             status_code=res.status_code if "res" in locals() else None,
+            project_id=project_id,
+            mr_iid=mr_iid,
             exc_info=True,
         )
         raise
@@ -400,6 +413,8 @@ async def update_all_messages_transactional(
                                     message_id=str(message_id),
                                     mr_ref_id=mri.merge_request_ref_id,
                                     status_code=res.status_code if "res" in locals() else None,
+                                    project_id=mri.merge_request_payload.object_attributes.target_project_id,
+                                    mr_iid=mri.merge_request_payload.object_attributes.iid,
                                     exc_info=True,
                                 )
 

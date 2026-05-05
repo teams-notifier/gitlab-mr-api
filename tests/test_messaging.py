@@ -13,6 +13,7 @@ from webhook.messaging import MRMessRef
 from webhook.messaging import create_or_update_message
 from webhook.messaging import get_or_create_message_refs
 from webhook.messaging import update_all_messages_transactional
+from webhook.messaging import update_message_with_fingerprint
 
 
 @pytest.fixture
@@ -60,6 +61,8 @@ def sample_mri():
     mri.merge_request_ref_id = 1
     mri.merge_request_payload.object_attributes.state = "opened"
     mri.merge_request_payload.object_attributes.title = "Test MR"
+    mri.merge_request_payload.object_attributes.target_project_id = 42
+    mri.merge_request_payload.object_attributes.iid = 123
     mri.merge_request_payload.project.path_with_namespace = "test/project"
     return mri
 
@@ -218,12 +221,23 @@ class TestCreateOrUpdateMessage:
 
         mock_http_client.request.side_effect = httpx.HTTPError("Connection failed")
 
-        with pytest.raises(httpx.HTTPError):
+        with (
+            patch("webhook.messaging.logger") as mock_logger,
+            pytest.raises(httpx.HTTPError),
+        ):
             await create_or_update_message(
                 mock_http_client,
                 sample_mr_mess_ref,
                 card={"body": []},
+                project_id=42,
+                mr_iid=123,
             )
+
+        # Error log must carry project_id/mr_iid for triage
+        mock_logger.error.assert_called_once()
+        call_kwargs = mock_logger.error.call_args[1]
+        assert call_kwargs["project_id"] == 42
+        assert call_kwargs["mr_iid"] == 123
 
 
 class TestUpdateAllMessagesTransactional:
@@ -423,17 +437,25 @@ class TestUpdateAllMessagesTransactional:
             mock_client_ctx.__aexit__ = AsyncMock()
             mock_client_class.return_value = mock_client_ctx
 
-            count = await update_all_messages_transactional(
-                sample_mri,
-                {"body": []},
-                "summary",
-                "fingerprint",
-                datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC),
-                "test-action",
-            )
+            with patch("webhook.messaging.logger") as mock_logger:
+                count = await update_all_messages_transactional(
+                    sample_mri,
+                    {"body": []},
+                    "summary",
+                    "fingerprint",
+                    datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC),
+                    "test-action",
+                )
 
             assert count == 1
             assert mock_client_instance.request.call_count == 2
+
+            # Per-message error log must include project_id/mr_iid pulled from
+            # the mri payload (not threaded through kwargs in this code path).
+            assert mock_logger.error.call_count == 1
+            call_kwargs = mock_logger.error.call_args[1]
+            assert call_kwargs["project_id"] == 42
+            assert call_kwargs["mr_iid"] == 123
 
     async def test_update_raises_error_on_http_failure(
         self, mock_http_client, mock_database, sample_mr_mess_ref
@@ -637,6 +659,164 @@ class TestUpdateAllMessagesTransactionalOrdering:
 
             assert count == 1
             mock_client_instance.request.assert_called_once()
+
+
+class TestUpdateMessageWithFingerprint:
+    async def test_successful_update_stores_fingerprint(
+        self, mock_http_client, mock_database, sample_mr_mess_ref
+    ):
+        mock_db, mock_conn = mock_database
+        response_mock = MagicMock()
+        response_mock.status_code = 200
+        response_mock.raise_for_status = MagicMock()
+        mock_http_client.request.return_value = response_mock
+        mock_conn.execute.return_value = "UPDATE 1"
+
+        card = {"type": "AdaptiveCard", "body": []}
+        fingerprint = "abc123"
+        updated_at = datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC)
+
+        await update_message_with_fingerprint(
+            mock_http_client,
+            sample_mr_mess_ref,
+            card,
+            "Test summary",
+            fingerprint,
+            updated_at,
+            project_id=42,
+            mr_iid=123,
+        )
+
+        mock_http_client.request.assert_called_once()
+        call_args = mock_http_client.request.call_args
+        assert call_args[0][0] == "PATCH"
+        assert call_args[1]["json"]["message_id"] == str(sample_mr_mess_ref.message_id)
+
+        # Verify fingerprint and updated_at are passed to the conditional UPDATE
+        # (the function's whole reason for existing — name was lying without this).
+        mock_conn.execute.assert_called_once()
+        update_args = mock_conn.execute.call_args.args
+        assert update_args[1] == fingerprint
+        assert update_args[2] == updated_at
+        assert update_args[3] == sample_mr_mess_ref.merge_request_message_ref_id
+
+    async def test_skips_when_message_id_is_none(self, mock_http_client):
+        mrmsgref = MRMessRef(
+            merge_request_message_ref_id=1,
+            conversation_token=uuid.uuid4(),
+            message_id=None,
+        )
+
+        with patch("webhook.messaging.logger") as mock_logger:
+            await update_message_with_fingerprint(
+                mock_http_client,
+                mrmsgref,
+                {"body": []},
+                None,
+                "fingerprint",
+                datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC),
+                project_id=42,
+                mr_iid=123,
+            )
+
+            mock_http_client.request.assert_not_called()
+            mock_logger.warning.assert_called_once()
+            assert "NULL message_id" in str(mock_logger.warning.call_args)
+
+    async def test_race_condition_logs_warning_with_project_info(
+        self, mock_http_client, mock_database, sample_mr_mess_ref
+    ):
+        mock_db, mock_conn = mock_database
+        response_mock = MagicMock()
+        response_mock.status_code = 200
+        response_mock.raise_for_status = MagicMock()
+        mock_http_client.request.return_value = response_mock
+        mock_conn.execute.return_value = "UPDATE 0"
+
+        with patch("webhook.messaging.logger") as mock_logger:
+            await update_message_with_fingerprint(
+                mock_http_client,
+                sample_mr_mess_ref,
+                {"body": []},
+                None,
+                "fingerprint",
+                datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC),
+                project_id=42,
+                mr_iid=123,
+            )
+
+            mock_logger.warning.assert_called_once()
+            call_kwargs = mock_logger.warning.call_args[1]
+            assert call_kwargs["project_id"] == 42
+            assert call_kwargs["mr_iid"] == 123
+            assert "race" in mock_logger.warning.call_args[0][0]
+
+    async def test_http_error_logs_with_project_info(self, mock_http_client, sample_mr_mess_ref):
+        mock_http_client.request.side_effect = httpx.HTTPError("Connection failed")
+
+        with (
+            patch("webhook.messaging.logger") as mock_logger,
+            pytest.raises(httpx.HTTPError),
+        ):
+            await update_message_with_fingerprint(
+                mock_http_client,
+                sample_mr_mess_ref,
+                {"body": []},
+                None,
+                "fingerprint",
+                datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC),
+                project_id=42,
+                mr_iid=123,
+            )
+
+        mock_logger.error.assert_called_once()
+        call_kwargs = mock_logger.error.call_args[1]
+        assert call_kwargs["project_id"] == 42
+        assert call_kwargs["mr_iid"] == 123
+
+    async def test_includes_summary_in_payload_when_provided(
+        self, mock_http_client, mock_database, sample_mr_mess_ref
+    ):
+        mock_db, mock_conn = mock_database
+        response_mock = MagicMock()
+        response_mock.status_code = 200
+        response_mock.raise_for_status = MagicMock()
+        mock_http_client.request.return_value = response_mock
+        mock_conn.execute.return_value = "UPDATE 1"
+
+        await update_message_with_fingerprint(
+            mock_http_client,
+            sample_mr_mess_ref,
+            {"body": []},
+            "Test summary",
+            "fingerprint",
+            datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC),
+        )
+
+        call_args = mock_http_client.request.call_args
+        assert call_args[1]["json"]["summary"] == "Test summary"
+
+    async def test_omits_summary_from_payload_when_none(
+        self, mock_http_client, mock_database, sample_mr_mess_ref
+    ):
+        mock_db, mock_conn = mock_database
+        response_mock = MagicMock()
+        response_mock.status_code = 200
+        response_mock.raise_for_status = MagicMock()
+        mock_http_client.request.return_value = response_mock
+        mock_conn.execute.return_value = "UPDATE 1"
+
+        await update_message_with_fingerprint(
+            mock_http_client,
+            sample_mr_mess_ref,
+            {"body": []},
+            None,
+            "fingerprint",
+            datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC),
+        )
+
+        call_args = mock_http_client.request.call_args
+        assert "summary" not in call_args[1]["json"]
 
 
 class TestMRMessRef:
