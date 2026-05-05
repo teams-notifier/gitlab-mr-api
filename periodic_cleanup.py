@@ -8,6 +8,7 @@ import httpx
 
 from cards.render import render
 from config import DefaultConfig
+from config import config
 from db import DatabaseLifecycleHandler
 from db import MergeRequestInfos
 from db import compute_mri_fingerprint
@@ -15,6 +16,7 @@ from db import dbh
 from db import has_unresolved_threads
 from db import make_mr_summary
 from gitlab_api import fetch_and_persist_discussion_stats
+from gitlab_api import fetch_and_refresh_mr_status
 from webhook.messaging import update_all_messages_transactional
 
 
@@ -45,6 +47,41 @@ async def _process_pending_refreshes() -> int:
                 merge_request_extra_state=row["merge_request_extra_state"],
                 head_pipeline_id=row["head_pipeline_id"],
             )
+
+            # Emoji events trigger a full MR status refresh via API
+            # to sync state that may have been lost due to missed webhooks.
+            # We do NOT short-circuit when stored state is already terminal:
+            # the merge_request handler updates payload state and schedules
+            # deletion in separate transactions, so a partial rollback can
+            # leave state="merged" with refs still present. Letting the API
+            # refresh + api-refresh-close branch run is the recovery for that.
+            api_refreshed = False
+            if row["payload_type"] == "emoji":
+                refreshed_mri = await fetch_and_refresh_mr_status(
+                    merge_request_ref_id=mri.merge_request_ref_id,
+                    project_url=mri.merge_request_payload.project.web_url,
+                    project_id=mri.merge_request_payload.object_attributes.target_project_id,
+                    mr_iid=mri.merge_request_payload.object_attributes.iid,
+                )
+                if refreshed_mri is not None:
+                    mri = refreshed_mri
+                    api_refreshed = True
+                    if mri.merge_request_payload.object_attributes.state in ("closed", "merged"):
+                        logger.info(
+                            "api refresh detected terminal state",
+                            merge_request_ref_id=mri.merge_request_ref_id,
+                            state=mri.merge_request_payload.object_attributes.state,
+                        )
+                else:
+                    # None = couldn't verify (no token / HTTP error). Distinct
+                    # from "API confirmed still open"; recurring emoji events
+                    # on a closed MR will keep landing here until API succeeds.
+                    logger.warning(
+                        "api refresh unavailable for emoji refresh",
+                        merge_request_ref_id=mri.merge_request_ref_id,
+                        project_id=mri.merge_request_payload.object_attributes.target_project_id,
+                        mr_iid=mri.merge_request_payload.object_attributes.iid,
+                    )
 
             had_unresolved_threads = has_unresolved_threads(mri.merge_request_extra_state)
 
@@ -87,6 +124,29 @@ async def _process_pending_refreshes() -> int:
                     merge_request_ref_id=mri.merge_request_ref_id,
                     payload_type=row["payload_type"],
                     fingerprint=datasource_fingerprint[:16],
+                )
+                continue
+
+            # API refresh detected closed/merged MR — schedule message deletion to clean up
+            if api_refreshed and is_closing_state:
+                datasource_fingerprint = compute_mri_fingerprint(mri)
+                card = render(mri, collapsed=True, show_collapsible=True)
+                await update_all_messages_transactional(
+                    mri,
+                    card,
+                    make_mr_summary(mri),
+                    datasource_fingerprint,
+                    payload_updated_at,
+                    "api-refresh-close",
+                    schedule_deletion=True,
+                    deletion_delay=datetime.timedelta(seconds=config.MESSAGE_DELETE_DELAY_SECONDS),
+                )
+                await dbh.delete_pending_refresh(mri.merge_request_ref_id)
+                processed += 1
+                logger.info(
+                    "api refresh detected closed/merged MR, scheduled message deletion",
+                    merge_request_ref_id=mri.merge_request_ref_id,
+                    state=mri.merge_request_payload.object_attributes.state,
                 )
                 continue
 
