@@ -219,6 +219,99 @@ async def test_successful_deletion_with_410_gone(mock_database, fresh_signal):
 
 
 @pytest.mark.asyncio
+async def test_deletion_with_400_invalid_message_id_drops_the_record(mock_database, fresh_signal):
+    """
+    POSITIVE TEST: 400 invalid message_id is terminal.
+
+    Scenario: the id was claimed but the card never reached Teams, so activity-api has no row
+    Result: record removed from msg_to_delete instead of retried forever
+
+    Location: periodic_cleanup.py:_cleanup_task
+    """
+    from config import DefaultConfig
+    from periodic_cleanup import _cleanup_task
+
+    connection = mock_database.connection
+
+    msg_to_delete_id = 1
+    records = [{"msg_to_delete_id": msg_to_delete_id, "message_id": uuid.uuid4()}]
+
+    prepared_stmt = MockPreparedStatement(records)
+    connection.prepare.return_value = prepared_stmt
+    connection.fetchval.return_value = None
+
+    client = AsyncMock()
+    invalid_response = MagicMock()
+    invalid_response.status_code = 400
+    invalid_response.json.return_value = {"detail": "invalid message_id"}
+    invalid_response.raise_for_status.side_effect = AssertionError("400 must not be raised")
+    client.request.return_value = invalid_response
+
+    config = DefaultConfig()
+
+    with (
+        patch("periodic_cleanup.httpx.AsyncClient", return_value=client),
+        patch("periodic_cleanup.signal", fresh_signal),
+    ):
+        task = _cleanup_task(config, mock_database)
+        try:
+            await asyncio.wait_for(task, timeout=0.1)
+        except TimeoutError:
+            pass
+
+    assert connection.execute.call_count == 1
+    delete_call = connection.execute.call_args_list[0]
+    assert "DELETE FROM msg_to_delete" in delete_call[0][0]
+    assert delete_call[0][1] == msg_to_delete_id
+
+
+@pytest.mark.asyncio
+async def test_deletion_with_an_unrelated_400_keeps_the_record(mock_database, fresh_signal):
+    """
+    NEGATIVE TEST: a 400 that is not "invalid message_id" must not be treated as terminal.
+
+    Scenario: a proxy or a future validation error answers 400
+    Result: the record stays in msg_to_delete instead of being dropped with the message still up
+
+    Location: periodic_cleanup.py:_cleanup_task
+    """
+    from config import DefaultConfig
+    from periodic_cleanup import _cleanup_task
+
+    connection = mock_database.connection
+
+    records = [{"msg_to_delete_id": 1, "message_id": uuid.uuid4()}]
+
+    prepared_stmt = MockPreparedStatement(records)
+    connection.prepare.return_value = prepared_stmt
+    connection.fetchval.return_value = None
+
+    client = AsyncMock()
+    other_400 = MagicMock()
+    other_400.status_code = 400
+    other_400.json.return_value = {"detail": "invalid conversation_token"}
+    other_400.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "bad request", request=MagicMock(), response=other_400
+    )
+    client.request.return_value = other_400
+
+    config = DefaultConfig()
+
+    with (
+        patch("periodic_cleanup.httpx.AsyncClient", return_value=client),
+        patch("periodic_cleanup.signal", fresh_signal),
+    ):
+        task = _cleanup_task(config, mock_database)
+        try:
+            await asyncio.wait_for(task, timeout=0.1)
+        except TimeoutError:
+            pass
+
+    deletes = [c for c in connection.execute.call_args_list if "DELETE FROM msg_to_delete" in c[0][0]]
+    assert deletes == []
+
+
+@pytest.mark.asyncio
 async def test_successful_deletion_with_200_ok(mock_database, fresh_signal):
     """
     POSITIVE TEST: 200 OK is accepted (message deleted successfully).

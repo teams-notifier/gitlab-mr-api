@@ -1033,8 +1033,8 @@ async def test_e2e_race_update_arrives_before_open_with_older_timestamp(
     7. Result: DB points to deleted M2, actual M1 orphaned
 
     After fix:
-    - create_or_update_message() returns None when duplicate detected
-    - DB keeps M1, no orphaned messages
+    - the id is claimed in the database before the create call, so the loser never posts
+    - DB keeps M1, no orphaned messages, no compensating delete
 
     Validates:
     - Duplicate message detection works correctly
@@ -1110,16 +1110,13 @@ async def test_e2e_race_update_arrives_before_open_with_older_timestamp(
     message_id = msg_refs[0]["message_id"]
     assert message_id is not None, "Message ref should have a valid message_id"
 
-    # Count API requests: POST creates, DELETE removes duplicates
     requests = mock_activity_api["requests"]
     post_requests = [r for r in requests if r["method"] == "POST"]
     delete_requests = [r for r in requests if r["method"] == "DELETE"]
 
-    # With the fix: if duplicate detected, message is deleted and create_or_update_message returns None
-    # So we should have at most 1 successful create (no orphaned messages)
-    # Under race: 1 or 2 POSTs depending on timing, but at most 1 DELETE
-    assert len(post_requests) >= 1, "At least one message should be created"
-    assert len(delete_requests) <= 1, "At most one duplicate should be deleted"
+    # Claiming the id first means only one request can post, and nothing needs undoing.
+    assert len(post_requests) == 1, "Exactly one message should be created"
+    assert len(delete_requests) == 0, "No compensating delete should be needed"
 
     # Verify timestamp is from the newer event (Open with T1)
     final_updated_at = msg_refs[0]["last_processed_updated_at"]

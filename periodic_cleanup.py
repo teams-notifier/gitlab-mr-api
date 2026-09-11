@@ -17,6 +17,7 @@ from db import has_unresolved_threads
 from db import make_mr_summary
 from gitlab_api import fetch_and_persist_discussion_stats
 from gitlab_api import fetch_and_refresh_mr_status
+from webhook.messaging import is_unknown_message_id
 from webhook.messaging import update_all_messages_transactional
 
 
@@ -191,7 +192,7 @@ async def _process_pending_refreshes() -> int:
 
 
 async def _cleanup_task(config: DefaultConfig, database: DatabaseLifecycleHandler):
-    timeout = httpx.Timeout(10.0, connect=5.0)
+    timeout = config.activity_api_timeout()
     client = httpx.AsyncClient(timeout=timeout)
     while True:
         wait_sec: float = MAX_WAIT
@@ -218,7 +219,9 @@ async def _cleanup_task(config: DefaultConfig, database: DatabaseLifecycleHandle
                                     "message_id": str(record["message_id"]),
                                 },
                             )
-                            if res.status_code not in (410, 200):
+                            # An id activity-api cannot resolve was claimed but never delivered:
+                            # there is nothing to delete, so drop the row instead of retrying it.
+                            if res.status_code not in (200, 410) and not is_unknown_message_id(res):
                                 res.raise_for_status()
                             await connection.execute(
                                 "DELETE FROM msg_to_delete WHERE msg_to_delete_id = $1",

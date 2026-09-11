@@ -4,5 +4,7 @@ pytest-asyncio>=0.23.0
 pytest-mock>=3.12.0
 pytest-cov>=4.1.0
 respx>=0.21.0
+# starlette 1.x TestClient imports httpx2, not httpx, and raises on the fallback
+httpx2>=2.12.0
 testcontainers>=3.7.0
 psycopg2-binary>=2.9.0

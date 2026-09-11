@@ -227,7 +227,7 @@ async def merge_request(
         messages_processed = 0
         messages_failed = 0
 
-        timeout = httpx.Timeout(10.0, connect=5.0)
+        timeout = config.activity_api_timeout()
         async with httpx.AsyncClient(timeout=timeout) as client:
             for mrmsgref in all_message_refs:
                 if mrmsgref.last_processed_updated_at is not None:

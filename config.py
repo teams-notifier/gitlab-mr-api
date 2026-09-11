@@ -5,6 +5,7 @@ import os
 from dataclasses import dataclass
 
 import dotenv
+import httpx
 
 
 dotenv.load_dotenv()
@@ -28,6 +29,8 @@ class DefaultConfig:
     LOG_QUERIES = os.environ.get("LOG_QUERIES", "")
     VALID_X_GITLAB_TOKEN = os.environ.get("VALID_X_GITLAB_TOKEN", "")
     MESSAGE_DELETE_DELAY_SECONDS = int(os.environ.get("MESSAGE_DELETE_DELAY_SECONDS", "30"))
+    ACTIVITY_API_TIMEOUT_SECONDS = float(os.environ.get("ACTIVITY_API_TIMEOUT_SECONDS", "10.0"))
+    GITLAB_API_TIMEOUT_SECONDS = float(os.environ.get("GITLAB_API_TIMEOUT_SECONDS", "5.0"))
     NOTE_DEBOUNCE_SECONDS = float(os.environ.get("NOTE_DEBOUNCE_SECONDS", "5.0"))
     EMOJI_DEBOUNCE_SECONDS = float(os.environ.get("EMOJI_DEBOUNCE_SECONDS", "5.0"))
     _valid_tokens: list[str]
@@ -50,6 +53,12 @@ class DefaultConfig:
                     )
             except (json.JSONDecodeError, KeyError, TypeError):
                 pass
+
+    def activity_api_timeout(self) -> httpx.Timeout:
+        return httpx.Timeout(self.ACTIVITY_API_TIMEOUT_SECONDS, connect=self.ACTIVITY_API_TIMEOUT_SECONDS / 2)
+
+    def gitlab_api_timeout(self) -> httpx.Timeout:
+        return httpx.Timeout(self.GITLAB_API_TIMEOUT_SECONDS, connect=self.GITLAB_API_TIMEOUT_SECONDS / 2)
 
     def is_valid_token(self, token: str) -> bool:
         return token.lower() in self._valid_tokens
