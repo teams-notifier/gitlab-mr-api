@@ -112,18 +112,16 @@ async def test_merge_close_transactional_rollback_on_failure(mock_database, samp
 
 
 @pytest.mark.asyncio
-async def test_race_condition_duplicate_message_deletion_logs_failure(mock_database):
+async def test_race_condition_loser_sends_nothing(mock_database):
     """
-    POSITIVE TEST: Race condition handling gracefully logs DELETE failures.
+    POSITIVE TEST: concurrent creates cannot produce two messages.
 
-    Scenario: Two webhooks create messages simultaneously, second one's DELETE fails
-    Result: DELETE failure is logged but doesn't crash; returns None to signal duplicate
-    Impact: Graceful degradation - duplicate may persist in Teams but caller knows not to use it
+    Scenario: two webhooks race to create the message for the same ref
+    Result: the request that loses the id claim never calls activity-api and returns None
+    Impact: no duplicate in Teams, and no compensating delete to get wrong
 
     Location: webhook/messaging.py:create_or_update_message
     """
-    import httpx
-
     from webhook.messaging import MRMessRef
     from webhook.messaging import create_or_update_message
 
@@ -131,18 +129,6 @@ async def test_race_condition_duplicate_message_deletion_logs_failure(mock_datab
     connection.fetchrow.return_value = None
 
     client = AsyncMock()
-    create_response = MagicMock()
-    create_response.status_code = 200
-    new_message_id = str(uuid.uuid4())
-    create_response.json.return_value = {"message_id": new_message_id}
-
-    delete_response = MagicMock()
-    delete_response.status_code = 500
-    delete_response.raise_for_status.side_effect = httpx.HTTPStatusError(
-        "Server error", request=MagicMock(), response=delete_response
-    )
-
-    client.request.side_effect = [create_response, delete_response]
 
     mrmsgref = MRMessRef(
         merge_request_message_ref_id=1,
@@ -159,7 +145,7 @@ async def test_race_condition_duplicate_message_deletion_logs_failure(mock_datab
         )
 
     assert result is None
-    assert client.request.call_count == 2
+    client.request.assert_not_called()
     assert connection.fetchrow.call_count == 1
 
 

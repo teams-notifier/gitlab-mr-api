@@ -26,6 +26,35 @@ class MRMessRef(BaseModel):
     last_processed_updated_at: datetime.datetime | None = None
 
 
+def is_unknown_message_id(res: httpx.Response | None) -> bool:
+    """activity-api answers 400 `invalid message_id` when it holds no row for that id."""
+    if res is None or res.status_code != 400:
+        return False
+    try:
+        return bool(res.json().get("detail") == "invalid message_id")
+    except Exception:
+        return False
+
+
+async def release_stale_message_id(merge_request_message_ref_id: int, message_id: uuid.UUID) -> None:
+    """Give a claimed id back so the next event creates the message instead of patching a ghost."""
+    connection: asyncpg.Connection
+    async with await database.acquire() as connection:
+        await connection.execute(
+            """UPDATE merge_request_message_ref
+                SET message_id = NULL
+                WHERE merge_request_message_ref_id = $1
+                    AND message_id = $2""",
+            merge_request_message_ref_id,
+            message_id,
+        )
+    logger.warning(
+        "released stale message id - next event recreates the message",
+        merge_request_message_ref_id=merge_request_message_ref_id,
+        message_id=str(message_id),
+    )
+
+
 async def get_or_create_message_refs(
     merge_request_ref_id: int,
     conv_tokens: list[str],
@@ -143,7 +172,31 @@ async def create_or_update_message(
         if update_only is True:
             return None
 
+        # Claim the id before calling activity-api. A POST that times out after Teams already
+        # accepted the card used to leave a message no later patch or delete could ever reach.
+        # Claiming first also settles the concurrent-create race: the loser never POSTs.
+        reserved_id = uuid.uuid4()
+        connection: asyncpg.Connection
+        async with await database.acquire() as connection:
+            result = await connection.fetchrow(
+                """UPDATE merge_request_message_ref
+                    SET message_id = $1
+                    WHERE merge_request_message_ref_id = $2
+                        AND message_id IS NULL
+                    RETURNING merge_request_message_ref_id
+                """,
+                reserved_id,
+                mrmsgref.merge_request_message_ref_id,
+            )
+        if result is None:
+            logger.warning(
+                "message id already claimed by a concurrent request - deferring to it",
+                merge_request_message_ref_id=mrmsgref.merge_request_message_ref_id,
+            )
+            return None
+
         payload["conversation_token"] = str(mrmsgref.conversation_token)
+        payload["message_id"] = str(reserved_id)
         try:
             res = await client.request(
                 "POST",
@@ -158,42 +211,17 @@ async def create_or_update_message(
                 method="POST",
                 url=config.ACTIVITY_API + "api/v1/message",
                 conversation_token=str(mrmsgref.conversation_token),
+                message_id=str(reserved_id),
                 status_code=res.status_code if "res" in locals() else None,
                 project_id=project_id,
                 mr_iid=mr_iid,
                 exc_info=True,
             )
+            # 400 and 409 are both answered without anything reaching Teams, so the claimed id
+            # names nothing and must go back: keeping it locks the ref onto a ghost forever.
+            if "res" in locals() and res.status_code in (400, 409):
+                await release_stale_message_id(mrmsgref.merge_request_message_ref_id, reserved_id)
             raise
-
-        connection: asyncpg.Connection
-        async with await database.acquire() as connection:
-            result = await connection.fetchrow(
-                """UPDATE merge_request_message_ref
-                    SET message_id = $1
-                    WHERE merge_request_message_ref_id = $2
-                        AND message_id IS NULL
-                    RETURNING merge_request_message_ref_id
-                """,
-                response.get("message_id"),
-                mrmsgref.merge_request_message_ref_id,
-            )
-        if result is None or len(result) == 0:
-            logger.warning(
-                "duplicate message detected - another request already set message_id",
-                merge_request_message_ref_id=mrmsgref.merge_request_message_ref_id,
-                duplicate_message_id=response.get("message_id"),
-            )
-            try:
-                await client.request(
-                    "DELETE",
-                    config.ACTIVITY_API + "api/v1/message",
-                    json={
-                        "message_id": str(response.get("message_id")),
-                    },
-                )
-            except Exception:
-                logger.exception("Failed to delete duplicate message %s", response.get("message_id"))
-            return None
     else:
         payload["message_id"] = str(mrmsgref.message_id)
         try:
@@ -215,6 +243,8 @@ async def create_or_update_message(
                 mr_iid=mr_iid,
                 exc_info=True,
             )
+            if is_unknown_message_id(res if "res" in locals() else None):
+                await release_stale_message_id(mrmsgref.merge_request_message_ref_id, mrmsgref.message_id)
             raise
     return uuid.UUID(response.get("message_id"))
 
@@ -296,6 +326,8 @@ async def update_message_with_fingerprint(
             mr_iid=mr_iid,
             exc_info=True,
         )
+        if is_unknown_message_id(res if "res" in locals() else None):
+            await release_stale_message_id(mrmsgref.merge_request_message_ref_id, mrmsgref.message_id)
         raise
 
 
@@ -324,7 +356,7 @@ async def update_all_messages_transactional(
     )
 
     connection: asyncpg.Connection
-    timeout = httpx.Timeout(10.0, connect=5.0)
+    timeout = config.activity_api_timeout()
     message_count = 0
 
     async with await database.acquire() as connection:
@@ -432,6 +464,14 @@ async def update_all_messages_transactional(
                                     ($1, now()+$2::INTERVAL)""",
                                 str(message_id),
                                 deletion_delay,
+                            )
+                        else:
+                            logger.warning(
+                                "orphan message at deletion - ref has no message_id",
+                                action=action_name,
+                                merge_request_message_ref_id=row.get("merge_request_message_ref_id"),
+                                conversation_token=str(row.get("conversation_token")),
+                                mr_ref_id=mri.merge_request_ref_id,
                             )
                         await connection.execute(
                             """DELETE FROM merge_request_message_ref

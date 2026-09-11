@@ -149,22 +149,15 @@ async def test_get_or_create_returns_existing_and_new_refs(mock_database):
 
 
 @pytest.mark.asyncio
-async def test_duplicate_message_cleanup_on_db_conflict(mock_database):
-    """Test that duplicate message is deleted when DB update returns NULL (conflict)."""
+async def test_no_duplicate_sent_when_id_claim_lost(mock_database):
+    """A ref whose id another request already claimed must not send a second message."""
     from webhook.messaging import create_or_update_message
 
     connection = mock_database.connection
     connection.fetchrow.return_value = None
 
-    create_response = MagicMock()
-    create_response.status_code = 200
-    create_response.json.return_value = {"message_id": str(uuid.uuid4())}
-
-    delete_response = MagicMock()
-    delete_response.status_code = 200
-
     client = AsyncMock()
-    client.request = AsyncMock(side_effect=[create_response, delete_response])
+    client.request = AsyncMock()
 
     mrmsgref = MRMessRef(
         merge_request_message_ref_id=1,
@@ -173,20 +166,15 @@ async def test_duplicate_message_cleanup_on_db_conflict(mock_database):
     )
 
     with patch("webhook.messaging.database", mock_database):
-        await create_or_update_message(
+        result = await create_or_update_message(
             client=client,
             mrmsgref=mrmsgref,
             card={"type": "AdaptiveCard"},
             summary="Test",
         )
 
-    assert client.request.call_count == 2
-
-    first_call = client.request.call_args_list[0]
-    assert first_call[0][0] == "POST"
-
-    second_call = client.request.call_args_list[1]
-    assert second_call[0][0] == "DELETE"
+    assert result is None
+    client.request.assert_not_called()
 
 
 @pytest.mark.asyncio

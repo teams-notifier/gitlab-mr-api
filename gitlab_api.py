@@ -80,7 +80,7 @@ async def _fetch_mr_discussion_stats(
     )
 
     try:
-        timeout = httpx.Timeout(5.0, connect=2.0)
+        timeout = config.gitlab_api_timeout()
         async with httpx.AsyncClient(timeout=timeout) as client:
             discussions: list[dict[str, Any]] = []
             url: str | None = base_url
@@ -220,7 +220,7 @@ async def _fetch_mr_status(
     url = f"{api_token.url.rstrip('/')}/api/v4/projects/{encoded_project_id}/merge_requests/{mr_iid}"
 
     try:
-        timeout = httpx.Timeout(5.0, connect=2.0)
+        timeout = config.gitlab_api_timeout()
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.get(
                 url,

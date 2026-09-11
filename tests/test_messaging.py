@@ -12,6 +12,7 @@ import pytest
 from webhook.messaging import MRMessRef
 from webhook.messaging import create_or_update_message
 from webhook.messaging import get_or_create_message_refs
+from webhook.messaging import is_unknown_message_id
 from webhook.messaging import update_all_messages_transactional
 from webhook.messaging import update_message_with_fingerprint
 
@@ -191,33 +192,192 @@ class TestCreateOrUpdateMessage:
         assert result is None
         mock_http_client.request.assert_not_called()
 
-    async def test_deletes_duplicate_message_on_db_conflict(
-        self, mock_http_client, mock_database, sample_mr_mess_ref
-    ):
+    async def test_claims_id_before_posting(self, mock_http_client, mock_database, sample_mr_mess_ref):
         mock_db, mock_conn = mock_database
         sample_mr_mess_ref.message_id = None
-        new_message_id = str(uuid.uuid4())
+
+        order = []
 
         response_mock = MagicMock()
         response_mock.status_code = 200
-        response_mock.json.return_value = {"message_id": new_message_id}
-        mock_http_client.request.return_value = response_mock
+        response_mock.json.side_effect = lambda: {"message_id": str(mock_conn.fetchrow.call_args[0][1])}
 
-        mock_conn.fetchrow.return_value = None
+        async def record_claim(*args, **kwargs):
+            order.append("claim")
+            return {"merge_request_message_ref_id": 123}
 
-        await create_or_update_message(
+        async def record_post(*args, **kwargs):
+            order.append("post")
+            return response_mock
+
+        mock_conn.fetchrow.side_effect = record_claim
+        mock_http_client.request.side_effect = record_post
+
+        result = await create_or_update_message(
             mock_http_client,
             sample_mr_mess_ref,
             card={"body": []},
         )
 
-        assert mock_http_client.request.call_count == 2
-        delete_call = mock_http_client.request.call_args_list[1]
-        assert delete_call[0][0] == "DELETE"
-        assert delete_call[1]["json"]["message_id"] == new_message_id
+        assert order == ["claim", "post"]
+        claim_sql, claimed_id, _ = mock_conn.fetchrow.call_args[0]
+        assert "SET message_id = $1" in claim_sql
+        assert "AND message_id IS NULL" in claim_sql
+        # The id reaches the database before it reaches activity-api, and it is the one posted.
+        assert mock_http_client.request.call_args[1]["json"]["message_id"] == str(claimed_id)
+        assert result == claimed_id
 
-    async def test_error_on_create_raises_exception(self, mock_http_client, sample_mr_mess_ref):
+    async def test_no_post_when_id_already_claimed(self, mock_http_client, mock_database, sample_mr_mess_ref):
+        mock_db, mock_conn = mock_database
         sample_mr_mess_ref.message_id = None
+        mock_conn.fetchrow.return_value = None
+
+        result = await create_or_update_message(
+            mock_http_client,
+            sample_mr_mess_ref,
+            card={"body": []},
+        )
+
+        assert result is None
+        mock_http_client.request.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            httpx.ReadTimeout("timed out"),
+            httpx.HTTPError("Connection failed"),
+        ],
+    )
+    async def test_claimed_id_persists_when_create_call_fails(
+        self, mock_http_client, mock_database, sample_mr_mess_ref, failure
+    ):
+        """A create call that fails after Teams accepted the card must still leave a usable id.
+
+        Losing it is what stranded MR !367's message: activity-api answered 201 after 17s, the
+        client had already timed out at 10s, and nothing could delete the message afterwards.
+        """
+        mock_db, mock_conn = mock_database
+        sample_mr_mess_ref.message_id = None
+        mock_conn.fetchrow.return_value = {"merge_request_message_ref_id": 123}
+        mock_http_client.request.side_effect = failure
+
+        with pytest.raises(type(failure)):
+            await create_or_update_message(
+                mock_http_client,
+                sample_mr_mess_ref,
+                card={"body": []},
+            )
+
+        claim_sql, claimed_id, ref_id = mock_conn.fetchrow.call_args[0]
+        assert "UPDATE merge_request_message_ref" in claim_sql
+        assert isinstance(claimed_id, uuid.UUID)
+        assert ref_id == sample_mr_mess_ref.merge_request_message_ref_id
+        assert mock_http_client.request.call_args[1]["json"]["message_id"] == str(claimed_id)
+
+    @pytest.mark.parametrize("refused_status", [400, 409])
+    async def test_refused_create_gives_the_claimed_id_back(
+        self, mock_http_client, mock_database, sample_mr_mess_ref, refused_status
+    ):
+        """activity-api answers 400/409 without touching Teams, so the ref must not keep the id.
+
+        Keeping it is worse than the bug it fixes: every later event patches an id activity-api
+        does not know, and the merge request never gets a card at all.
+        """
+        mock_db, mock_conn = mock_database
+        sample_mr_mess_ref.message_id = None
+        mock_conn.fetchrow.return_value = {"merge_request_message_ref_id": 123}
+
+        refused = MagicMock()
+        refused.status_code = refused_status
+        refused.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "refused", request=MagicMock(), response=refused
+        )
+        mock_http_client.request.return_value = refused
+
+        with pytest.raises(httpx.HTTPStatusError):
+            await create_or_update_message(
+                mock_http_client,
+                sample_mr_mess_ref,
+                card={"body": []},
+            )
+
+        claimed_id = mock_conn.fetchrow.call_args[0][1]
+        releases = [c for c in mock_conn.execute.call_args_list if "SET message_id = NULL" in str(c[0][0])]
+        assert len(releases) == 1
+        assert releases[0][0][2] == claimed_id
+
+    async def test_ambiguous_create_failure_keeps_the_claimed_id(
+        self, mock_http_client, mock_database, sample_mr_mess_ref
+    ):
+        """A timeout may mean Teams got the card, so the id stays: it is the only handle left."""
+        mock_db, mock_conn = mock_database
+        sample_mr_mess_ref.message_id = None
+        mock_conn.fetchrow.return_value = {"merge_request_message_ref_id": 123}
+        mock_http_client.request.side_effect = httpx.ReadTimeout("timed out")
+
+        with pytest.raises(httpx.ReadTimeout):
+            await create_or_update_message(
+                mock_http_client,
+                sample_mr_mess_ref,
+                card={"body": []},
+            )
+
+        releases = [c for c in mock_conn.execute.call_args_list if "SET message_id = NULL" in str(c[0][0])]
+        assert releases == []
+
+    async def test_patch_on_unknown_id_gives_it_back(
+        self, mock_http_client, mock_database, sample_mr_mess_ref
+    ):
+        mock_db, mock_conn = mock_database
+        stale_id = sample_mr_mess_ref.message_id
+
+        unknown = MagicMock()
+        unknown.status_code = 400
+        unknown.json.return_value = {"detail": "invalid message_id"}
+        unknown.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "bad", request=MagicMock(), response=unknown
+        )
+        mock_http_client.request.return_value = unknown
+
+        with pytest.raises(httpx.HTTPStatusError):
+            await create_or_update_message(
+                mock_http_client,
+                sample_mr_mess_ref,
+                card={"body": []},
+            )
+
+        releases = [c for c in mock_conn.execute.call_args_list if "SET message_id = NULL" in str(c[0][0])]
+        assert len(releases) == 1
+        assert releases[0][0][2] == stale_id
+
+    async def test_patch_failure_that_is_not_an_unknown_id_keeps_it(
+        self, mock_http_client, mock_database, sample_mr_mess_ref
+    ):
+        mock_db, mock_conn = mock_database
+
+        server_error = MagicMock()
+        server_error.status_code = 500
+        server_error.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "boom", request=MagicMock(), response=server_error
+        )
+        mock_http_client.request.return_value = server_error
+
+        with pytest.raises(httpx.HTTPStatusError):
+            await create_or_update_message(
+                mock_http_client,
+                sample_mr_mess_ref,
+                card={"body": []},
+            )
+
+        releases = [c for c in mock_conn.execute.call_args_list if "SET message_id = NULL" in str(c[0][0])]
+        assert releases == []
+
+    async def test_error_on_create_raises_exception(
+        self, mock_http_client, mock_database, sample_mr_mess_ref
+    ):
+        mock_db, mock_conn = mock_database
+        sample_mr_mess_ref.message_id = None
+        mock_conn.fetchrow.return_value = {"merge_request_message_ref_id": 123}
 
         mock_http_client.request.side_effect = httpx.HTTPError("Connection failed")
 
@@ -397,6 +557,45 @@ class TestUpdateAllMessagesTransactional:
             assert any("msg_to_delete" in call for call in execute_calls)
             assert any("DELETE FROM merge_request_message_ref" in call for call in execute_calls)
 
+    async def test_warns_instead_of_dropping_a_ref_without_message_id(self, mock_database, sample_mri):
+        """A ref whose creation call never returned an id must be reported, not silently dropped.
+
+        This is the state MR !367's ref was in when it closed: no msg_to_delete row was written
+        and the ref was deleted anyway, leaving the Teams message with nothing pointing at it.
+        """
+        mock_db, mock_conn = mock_database
+
+        mock_conn.fetch.return_value = [
+            {
+                "merge_request_message_ref_id": 1,
+                "conversation_token": uuid.uuid4(),
+                "message_id": None,
+            }
+        ]
+
+        with (
+            patch("webhook.messaging.httpx.AsyncClient"),
+            patch("webhook.messaging.logger") as mock_logger,
+        ):
+            await update_all_messages_transactional(
+                sample_mri,
+                {"body": []},
+                "summary",
+                "fingerprint",
+                datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC),
+                "close/merge",
+                schedule_deletion=True,
+                deletion_delay=datetime.timedelta(seconds=0),
+            )
+
+        execute_calls = [str(call[0][0]) for call in mock_conn.execute.call_args_list]
+        assert not any("msg_to_delete" in call for call in execute_calls)
+        assert any("DELETE FROM merge_request_message_ref" in call for call in execute_calls)
+
+        warnings = [call for call in mock_logger.warning.call_args_list if "orphan" in call[0][0]]
+        assert len(warnings) == 1
+        assert warnings[0][1]["merge_request_message_ref_id"] == 1
+
     async def test_continues_on_http_error_per_message(self, mock_database, sample_mri):
         mock_db, mock_conn = mock_database
         message_id_1 = uuid.uuid4()
@@ -492,37 +691,6 @@ class TestUpdateAllMessagesTransactional:
         assert result == uuid.UUID(new_message_id)
         call_args = mock_http_client.request.call_args
         assert call_args[1]["json"]["text"] == "Hello World"
-
-    async def test_handles_delete_failure_gracefully(
-        self, mock_http_client, mock_database, sample_mr_mess_ref
-    ):
-        mock_db, mock_conn = mock_database
-        sample_mr_mess_ref.message_id = None
-        new_message_id = str(uuid.uuid4())
-
-        response_mock = MagicMock()
-        response_mock.status_code = 200
-        response_mock.json.return_value = {"message_id": new_message_id}
-
-        call_count = 0
-
-        async def side_effect(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                return response_mock
-            raise httpx.HTTPError("Delete failed")
-
-        mock_http_client.request.side_effect = side_effect
-        mock_conn.fetchrow.return_value = None
-
-        await create_or_update_message(
-            mock_http_client,
-            sample_mr_mess_ref,
-            card={"body": []},
-        )
-
-        assert mock_http_client.request.call_count == 2
 
 
 class TestUpdateAllMessagesTransactionalOrdering:
@@ -845,3 +1013,66 @@ class TestMRMessRef:
 
         assert ref.message_id is None
         assert ref.last_processed_fingerprint is None
+
+
+class TestUnknownMessageIdDetection:
+    """`is_unknown_message_id` decides whether a claimed id gets given back, so it must not
+    mistake an unrelated 400 for activity-api's `invalid message_id`."""
+
+    def test_recognises_the_unknown_id_answer(self):
+        res = MagicMock()
+        res.status_code = 400
+        res.json.return_value = {"detail": "invalid message_id"}
+        assert is_unknown_message_id(res) is True
+
+    @pytest.mark.parametrize(
+        "status_code, json_value",
+        [
+            (400, {"detail": "invalid conversation_token"}),
+            (400, {"detail": "message deleted, can't be updated"}),
+            (409, {"detail": "invalid message_id"}),
+            (500, {"detail": "invalid message_id"}),
+        ],
+    )
+    def test_rejects_everything_else(self, status_code, json_value):
+        res = MagicMock()
+        res.status_code = status_code
+        res.json.return_value = json_value
+        assert is_unknown_message_id(res) is False
+
+    def test_survives_a_body_that_is_not_json(self):
+        res = MagicMock()
+        res.status_code = 400
+        res.json.side_effect = ValueError("not json")
+        assert is_unknown_message_id(res) is False
+
+    def test_handles_no_response_at_all(self):
+        assert is_unknown_message_id(None) is False
+
+
+class TestUpdateMessageWithFingerprintRelease:
+    async def test_unknown_id_is_given_back(self, mock_http_client, mock_database, sample_mr_mess_ref):
+        mock_db, mock_conn = mock_database
+        stale_id = sample_mr_mess_ref.message_id
+
+        unknown = MagicMock()
+        unknown.status_code = 400
+        unknown.json.return_value = {"detail": "invalid message_id"}
+        unknown.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "bad", request=MagicMock(), response=unknown
+        )
+        mock_http_client.request.return_value = unknown
+
+        with pytest.raises(httpx.HTTPStatusError):
+            await update_message_with_fingerprint(
+                mock_http_client,
+                sample_mr_mess_ref,
+                {"body": []},
+                "summary",
+                "fingerprint",
+                datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC),
+            )
+
+        releases = [c for c in mock_conn.execute.call_args_list if "SET message_id = NULL" in str(c[0][0])]
+        assert len(releases) == 1
+        assert releases[0][0][2] == stale_id
