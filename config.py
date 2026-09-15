@@ -26,6 +26,7 @@ class DefaultConfig:
     DATABASE_URL = os.environ.get("DATABASE_URL", "")
     DATABASE_POOL_MIN_SIZE = int(os.environ.get("DATABASE_POOL_MIN_SIZE", "1"))
     DATABASE_POOL_MAX_SIZE = int(os.environ.get("DATABASE_POOL_MAX_SIZE", "10"))
+    DATABASE_ACQUIRE_TIMEOUT_SECONDS = float(os.environ.get("DATABASE_ACQUIRE_TIMEOUT_SECONDS", "30"))
     LOG_QUERIES = os.environ.get("LOG_QUERIES", "")
     VALID_X_GITLAB_TOKEN = os.environ.get("VALID_X_GITLAB_TOKEN", "")
     MESSAGE_DELETE_DELAY_SECONDS = int(os.environ.get("MESSAGE_DELETE_DELAY_SECONDS", "30"))

@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
+import asyncio
+import contextlib
 import datetime
 import hashlib
 
+from collections.abc import AsyncIterator
+
+import asyncpg
 import fastapi_structured_logging
 import httpx
 
@@ -24,6 +29,39 @@ from webhook.messaging import update_message_with_fingerprint
 
 
 logger = fastapi_structured_logging.get_logger()
+
+
+@contextlib.asynccontextmanager
+async def mr_lock(
+    merge_request_ref_id: int, *, timeout: float = 30.0, poll: float = 0.05
+) -> AsyncIterator[None]:
+    """Serialise the handlers of one merge request across both replicas.
+
+    Transaction-scoped: the pool never resets sessions (NoResetConnection), so a session lock
+    would leak. Polled: a waiter must not pin a pool connection while it waits.
+    """
+    deadline = asyncio.get_running_loop().time() + timeout
+    async with database.handler_slots:
+        while True:
+            connection: asyncpg.Connection
+            async with await database.acquire() as connection:
+                async with connection.transaction():
+                    acquired = await connection.fetchval(
+                        "SELECT pg_try_advisory_xact_lock(1, $1::int)", merge_request_ref_id
+                    )
+                    if acquired:
+                        yield
+                        return
+            if asyncio.get_running_loop().time() >= deadline:
+                # Losing the update is worse than a rare concurrent patch: run unlocked.
+                logger.warning(
+                    "merge request lock not acquired, proceeding unlocked",
+                    merge_request_ref_id=merge_request_ref_id,
+                    timeout_seconds=timeout,
+                )
+                yield
+                return
+            await asyncio.sleep(poll)
 
 
 class PartialMessageUpdateError(Exception):
@@ -64,6 +102,27 @@ async def merge_request(
     # This prevents payload corruption from OOO events
     merge_request_ref_id = await dbh.get_or_create_merge_request_ref_id(mr)
 
+    async with mr_lock(merge_request_ref_id):
+        return await _merge_request_locked(
+            mr,
+            merge_request_ref_id,
+            payload_updated_at,
+            is_closing_action,
+            conversation_tokens,
+            participant_ids_filter,
+            new_commits_revoke_approvals,
+        )
+
+
+async def _merge_request_locked(
+    mr: MergeRequestPayload,
+    merge_request_ref_id: int,
+    payload_updated_at: datetime.datetime,
+    is_closing_action: bool,
+    conversation_tokens: list[str],
+    participant_ids_filter: list[int],
+    new_commits_revoke_approvals: bool,
+):
     # Early out-of-order check
     # Reopen bypasses OOO: recreates messages after close, or updates existing if close arrives late
     # Closing actions check OOO: late close must not delete a reopened MR's messages

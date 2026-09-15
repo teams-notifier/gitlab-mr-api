@@ -339,6 +339,135 @@ async def test_e2e_race_concurrent_updates_with_locking(
 
 
 @pytest.mark.asyncio
+async def test_e2e_fanout_deliveries_patch_each_card_once(
+    db_connection, clean_database, base_mr_payload, mock_activity_api, db_lifecycle_handler
+):
+    """
+    RACE CONDITION: GitLab delivers one event through several hooks at once.
+
+    Scenario: a card exists; the same `update` event arrives 4 times within milliseconds
+    Result: the Teams card is patched exactly once. The other deliveries wait for the first,
+            then find its fingerprint already stored and skip.
+    Impact: concurrent PUTs on one Teams activity are what earns the fixed ~10s penalty upstream
+
+    Location: webhook/merge_request.py:mr_lock
+    """
+    from db import DBHelper
+    from gitlab_model import MergeRequestPayload
+    from webhook.merge_request import merge_request
+
+    dbh = DBHelper(db_lifecycle_handler)
+    conv_token = str(uuid.uuid4())
+
+    base_mr_payload["object_attributes"]["action"] = "open"
+    open_payload = MergeRequestPayload(**base_mr_payload)
+
+    update = base_mr_payload.copy()
+    update["object_attributes"] = base_mr_payload["object_attributes"].copy()
+    update["object_attributes"]["action"] = "update"
+    update["object_attributes"]["updated_at"] = "2025-01-01 00:01:00 UTC"
+    update_payload = MergeRequestPayload(**update)
+
+    with (
+        patch("webhook.merge_request.database", db_lifecycle_handler),
+        patch("webhook.merge_request.dbh", dbh),
+        patch("webhook.messaging.database", db_lifecycle_handler),
+        patch("db.database", db_lifecycle_handler),
+        patch("webhook.merge_request.render") as mock_render,
+    ):
+        mock_render.return_value = {"type": "AdaptiveCard"}
+
+        await merge_request(
+            mr=open_payload,
+            conversation_tokens=[conv_token],
+            participant_ids_filter=[],
+            new_commits_revoke_approvals=False,
+        )
+        assert sum(r["method"] == "POST" for r in mock_activity_api["requests"]) == 1
+
+        results = await asyncio.gather(
+            *[
+                merge_request(
+                    mr=update_payload,
+                    conversation_tokens=[conv_token],
+                    participant_ids_filter=[],
+                    new_commits_revoke_approvals=False,
+                )
+                for _ in range(4)
+            ],
+            return_exceptions=True,
+        )
+
+    assert [r for r in results if isinstance(r, Exception)] == []
+    patches = [r for r in mock_activity_api["requests"] if r["method"] == "PATCH"]
+    assert len(patches) == 1, f"one card, one event, expected one PATCH, got {len(patches)}"
+
+
+@pytest.mark.asyncio
+async def test_e2e_distinct_mrs_never_starve_the_pool(
+    db_connection, clean_database, base_mr_payload, mock_activity_api, test_database_url
+):
+    """
+    RESILIENCE: handlers of different MRs must not deadlock the connection pool.
+
+    Scenario: a pool of 2 and two MRs arriving together; each handler pins its lock connection
+              and needs one more for its body
+    Result: both complete. Without the holder cap both wait on each other forever, and
+            /healthz shares the pool, so the pod would hang until liveness restarts it
+
+    Location: db.py:handler_slots, webhook/merge_request.py:mr_lock
+    """
+    from config import DefaultConfig
+    from db import DatabaseLifecycleHandler
+    from db import DBHelper
+    from gitlab_model import MergeRequestPayload
+    from webhook.merge_request import merge_request
+
+    cfg = DefaultConfig()
+    cfg.DATABASE_URL = test_database_url
+    cfg.DATABASE_POOL_MIN_SIZE = 1
+    cfg.DATABASE_POOL_MAX_SIZE = 2
+    handler = DatabaseLifecycleHandler(cfg)
+    await handler.connect()
+    dbh = DBHelper(handler)
+
+    payloads = []
+    for iid in (1, 2):
+        p = base_mr_payload.copy()
+        p["object_attributes"] = base_mr_payload["object_attributes"].copy()
+        p["object_attributes"]["iid"] = iid
+        p["object_attributes"]["id"] = 1000 + iid
+        p["object_attributes"]["action"] = "open"
+        payloads.append(MergeRequestPayload(**p))
+
+    with (
+        patch("webhook.merge_request.database", handler),
+        patch("webhook.merge_request.dbh", dbh),
+        patch("webhook.messaging.database", handler),
+        patch("db.database", handler),
+        patch("webhook.merge_request.render", return_value={"type": "AdaptiveCard"}),
+    ):
+        tasks = [
+            asyncio.ensure_future(
+                merge_request(
+                    mr=p,
+                    conversation_tokens=[str(uuid.uuid4())],
+                    participant_ids_filter=[],
+                    new_commits_revoke_approvals=False,
+                )
+            )
+            for p in payloads
+        ]
+        done, pending = await asyncio.wait(tasks, timeout=15)
+        for t in pending:
+            t.cancel()
+    await handler.disconnect()
+
+    assert not pending, "handlers of distinct MRs starved each other of pool connections"
+    assert [t.exception() for t in done if t.exception()] == []
+
+
+@pytest.mark.asyncio
 async def test_e2e_race_update_during_close_deletion(
     db_connection, clean_database, base_mr_payload, mock_activity_api, db_lifecycle_handler
 ):
