@@ -41,6 +41,7 @@ When a merge request event occurs in GitLab:
 **Database Protection**:
 - Unique constraint on `(merge_request_ref_id, conversation_token)` prevents duplicate messages per channel
 - `FOR UPDATE` lock in `get_or_create_message_refs()` prevents concurrent corruption
+- A per-MR advisory lock (`mr_lock` in `webhook/merge_request.py`) serialises the handlers of one merge request, so the 3-4 deliveries GitLab fans out for a single event patch each Teams card once instead of concurrently
 
 ### 2. MR Switches to Draft
 

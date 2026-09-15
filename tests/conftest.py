@@ -1,9 +1,12 @@
+import asyncio
+
 #!/usr/bin/env python3
 import time
 import uuid
 
 from collections.abc import AsyncGenerator
 from typing import Any
+from unittest.mock import DEFAULT
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 
@@ -31,9 +34,17 @@ class MockConnection:
         self.execute = AsyncMock()
         self.fetch = AsyncMock(return_value=[])
         self.fetchrow = AsyncMock(return_value=None)
-        self.fetchval = AsyncMock(return_value=None)
+        # The per-MR advisory lock is always granted; every other fetchval keeps the answer a
+        # test configured through return_value (DEFAULT falls through to it).
+        self.fetchval = AsyncMock(return_value=None, side_effect=self._fetchval)
         self.prepare = AsyncMock()
         self._transaction = None
+
+    @staticmethod
+    def _fetchval(query, *args, **kwargs):
+        if "pg_try_advisory_xact_lock" in query:
+            return True
+        return DEFAULT
 
     def transaction(self):
         if self._transaction is None:
@@ -63,6 +74,7 @@ class MockAcquireContext:
 class MockDatabase:
     def __init__(self):
         self.connection = MockConnection()
+        self.handler_slots = asyncio.Semaphore(4)
 
     async def acquire(self):
         return MockAcquireContext(self.connection)
@@ -447,6 +459,9 @@ async def mock_activity_api(monkeypatch):
 
         async def request(self, method, url, **kwargs):
             requests.append({"method": method, "url": url, "kwargs": kwargs})
+            # A real call yields to the loop while in flight; without this the handlers under
+            # test never interleave and no race can show up.
+            await asyncio.sleep(0.01)
 
             if responses:
                 response_data = responses.pop(0)

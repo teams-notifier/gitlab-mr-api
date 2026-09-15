@@ -43,6 +43,9 @@ class DatabaseLifecycleHandler:
     def __init__(self, conf: DefaultConfig):
         self._pool: asyncpg.Pool | None = None
         self._config = conf
+        # A webhook handler pins its lock connection for its whole body and needs one more for
+        # the body itself: capping holders at pool // 2 - 1 leaves the rest to everyone else.
+        self.handler_slots = asyncio.Semaphore(max(1, conf.DATABASE_POOL_MAX_SIZE // 2 - 1))
 
     async def connect(self):
         log.debug("creating database connection pool")
@@ -89,7 +92,7 @@ class DatabaseLifecycleHandler:
 
     async def acquire(self) -> asyncpg.pool.PoolAcquireContext:
         assert self._pool is not None
-        return self._pool.acquire()
+        return self._pool.acquire(timeout=self._config.DATABASE_ACQUIRE_TIMEOUT_SECONDS)
 
 
 class GitlabUser(BaseModel):

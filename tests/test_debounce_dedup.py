@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Tests for debounce and deduplication mechanisms."""
 
+import asyncio
 import datetime
 
 from unittest.mock import AsyncMock
@@ -203,9 +204,15 @@ class TestPreCheckDeduplication:
 
             mock_conn = AsyncMock()
             mock_conn.fetchrow = AsyncMock(return_value=None)
+            # the per-MR lock opens a transaction and reads pg_try_advisory_xact_lock
+            mock_conn.transaction = MagicMock(
+                return_value=MagicMock(__aenter__=AsyncMock(), __aexit__=AsyncMock())
+            )
+            mock_conn.fetchval = AsyncMock(return_value=True)
             mock_database.acquire = AsyncMock(
                 return_value=MagicMock(__aenter__=AsyncMock(return_value=mock_conn))
             )
+            mock_database.handler_slots = asyncio.Semaphore(1)
 
             mock_render.return_value = {"type": "AdaptiveCard"}
             mock_fingerprint.return_value = "test-fingerprint"
