@@ -114,6 +114,29 @@ async def merge_request(
         )
 
 
+async def _claim_draft_to_ready(
+    connection: asyncpg.Connection, merge_request_ref_id: int, payload_updated_at: datetime.datetime
+) -> bool:
+    # GitLab fans one event out to every hook: only the delivery that claims it reposts. A dedicated
+    # marker, because the API refresh also stamps updated_at on the refs. Compare-and-set, so it
+    # holds on the unlocked lock-timeout path too; monotonic, so a late older event never re-claims.
+    row = await connection.fetchrow(
+        """UPDATE merge_request_ref
+            SET merge_request_extra_state = jsonb_set(
+                merge_request_extra_state, '{draft_to_ready_at}', to_jsonb($1::text)
+            )
+            WHERE merge_request_ref_id = $2
+                AND (
+                    merge_request_extra_state->>'draft_to_ready_at' IS NULL
+                    OR (merge_request_extra_state->>'draft_to_ready_at')::timestamptz < $1::text::timestamptz
+                )
+            RETURNING merge_request_ref_id""",
+        payload_updated_at.isoformat(),
+        merge_request_ref_id,
+    )
+    return row is not None
+
+
 async def _merge_request_locked(
     mr: MergeRequestPayload,
     merge_request_ref_id: int,
@@ -189,7 +212,12 @@ async def _merge_request_locked(
                 if row is not None:
                     mri.merge_request_extra_state = row["merge_request_extra_state"]
 
-            if mr.changes and "draft" in mr.changes and not mr.object_attributes.draft:
+            if (
+                mr.changes
+                and "draft" in mr.changes
+                and not mr.object_attributes.draft
+                and await _claim_draft_to_ready(connection, mri.merge_request_ref_id, payload_updated_at)
+            ):
                 temp_mri = await dbh.get_merge_request_ref_infos(mr)
                 temp_card = render(temp_mri, collapsed=False, show_collapsible=False)
                 temp_fingerprint = compute_mri_fingerprint(temp_mri)

@@ -33,7 +33,7 @@ When a merge request event occurs in GitLab:
 - Applies `participant_ids_filter` criteria
 - Message shows full MR details (expanded template)
 
-**Code Path**: `webhook/merge_request.py` lines 153-188
+**Code Path**: `_merge_request_locked()` in `webhook/merge_request.py` (non-closing branch)
 - Calls `get_or_create_message_refs()` to get/create message references
 - Calls `create_or_update_message()` for each conversation token
 - `update_only` parameter determines CREATE vs UPDATE behavior
@@ -53,9 +53,9 @@ When a merge request event occurs in GitLab:
 - Messages remain visible but less prominent
 - No deletion occurs
 
-**Code Path**: `webhook/merge_request.py` lines 153-188 (else branch)
+**Code Path**: `_merge_request_locked()` in `webhook/merge_request.py` (non-closing branch)
 - Falls through to `create_or_update_message()` with `update_only=True`
-- Collapsed template rendered (line 132-134)
+- Collapsed template rendered (`should_be_collapsed`)
 
 ### 3. Draft → Ready (Undraft)
 
@@ -66,10 +66,17 @@ When a merge request event occurs in GitLab:
 - **CREATE new messages** to bring MR back to attention
 - Purpose: Reset notification state, make MR visible again
 
-**Code Path**: `webhook/merge_request.py` lines 82-104
+**Code Path**: `_merge_request_locked()` in `webhook/merge_request.py`
 - Detects draft→ready transition via `mr.changes` inspection
-- Calls `update_all_messages_transactional()` with `schedule_deletion=True, deletion_delay=0`
+- Claims the event (`_claim_draft_to_ready()`): monotonic compare-and-set of `draft_to_ready_at`
+  (event `updated_at`) in `merge_request_extra_state`
+- Claimed only when the stored `draft_to_ready_at` is absent or older (compared as timestamptz): a late
+  older event never reposts, a replay of the newer one is skipped
+- Claim won: calls `update_all_messages_transactional()` with `schedule_deletion=True, deletion_delay=0`
 - Then falls through to create new messages
+- Runs once per GitLab event: later deliveries of the same event by other hooks lose the claim, skip
+  the delete-and-repost and run the normal per-ref path (create missing cards in their own channels,
+  patch stale ones)
 
 **Why Immediate Deletion**:
 - Old draft messages should disappear quickly
@@ -85,7 +92,7 @@ When a merge request event occurs in GitLab:
 - No new messages created
 - Collapsed template with final status icon
 
-**Code Path**: `webhook/merge_request.py` lines 142-152
+**Code Path**: `_merge_request_locked()` in `webhook/merge_request.py` (`is_closing_action` branch)
 - Calls `update_all_messages_transactional()` with configured delay
 - Periodic cleanup job (`periodic_cleanup`) deletes messages after delay expires
 
@@ -168,9 +175,9 @@ The system will skip message creation if:
 | Action is merge/close            | Terminal states use batch update path | Would update ALL existing messages, not create new ones         |
 
 **Code Flow**:
-- `webhook/merge_request.py` lines 154-177: Handles per-channel operations
-- `webhook/messaging.py` lines 23-78: `get_or_create_message_refs()` creates missing refs
-- `webhook/messaging.py` lines 99-122: `create_or_update_message()` creates message if `message_id=NULL` and `update_only=False`
+- `_merge_request_locked()` in `webhook/merge_request.py`: handles per-channel operations
+- `get_or_create_message_refs()` in `webhook/messaging.py`: creates missing refs
+- `create_or_update_message()` in `webhook/messaging.py`: creates message if `message_id=NULL` and `update_only=False`
 
 ## Filtering Behavior
 
@@ -191,7 +198,7 @@ participant_found = (
 - New messages are NOT created
 - Purpose: Update existing visibility without spamming irrelevant users
 
-**Code**: `webhook/merge_request.py` lines 41-50, 170-176
+**Code**: `_merge_request_locked()` in `webhook/merge_request.py` (`participant_found`)
 
 ## Fingerprint Usage and Deduplication Strategy
 
@@ -219,7 +226,7 @@ The system uses fingerprints at the per-message-ref level:
 
 **Actions**: `open`, `reopen`, `update`, `approved`, `unapproved`
 
-**Flow** (`webhook/merge_request.py` lines 155-210):
+**Flow** (`_merge_request_locked()` in `webhook/merge_request.py`):
 ```python
 # Ensure message refs exist for webhook's conversation tokens
 await get_or_create_message_refs(mr_ref_id, conversation_tokens)
@@ -265,17 +272,17 @@ Result: All 3 messages updated, including orphaned Channel B ✓
 
 **This solves the orphaned message problem**: Even though Webhook B is removed, its message stays up-to-date via remaining webhooks.
 
-#### 2. Closing Operations (merge, close, draft→ready)
+#### 2. Global batch operations (merge, close, draft→ready)
 
 **Actions**:
 - Draft→Ready transition (`update` with `changes.draft: {previous: true, current: false}`)
 - Close/Merge (`merge`, `close`, `state` in `["closed", "merged"]`)
 
-**Flow** (`webhook/merge_request.py` lines 144-154):
+**Flow** (`_merge_request_locked()` in `webhook/merge_request.py`):
 ```python
 # Use transactional batch update (locks ALL message refs)
 await update_all_messages_transactional(
-    mri, card, summary, payload_fingerprint,
+    mri, card, summary, payload_fingerprint, payload_updated_at,
     "close/merge",
     schedule_deletion=True,
     deletion_delay=...
@@ -286,9 +293,12 @@ await update_all_messages_transactional(
 - Locks ALL message refs with `FOR UPDATE`
 - Updates all messages via Teams API
 - Schedules all for deletion
-- First webhook to acquire lock wins, others find refs already deleted
+- Close/merge: first webhook to acquire lock wins, others find refs already deleted
+- Draft→ready: only the delivery that wins the `draft_to_ready_at` monotonic compare-and-set runs it;
+  the others keep the fresh cards and run the normal per-ref path (create missing cards in their own
+  channels, patch stale ones)
 
-**Code**: `update_all_messages_transactional()` in `webhook/messaging.py` lines 266-377:
+**Code**: `update_all_messages_transactional()` in `webhook/messaging.py`:
 ```python
 async with connection.transaction():
     locked_messages = await connection.fetch(
@@ -347,7 +357,7 @@ Result: All messages (including orphaned Channel B) updated/deleted exactly once
 | `open`                 | All refs         | **ALL**                | ✅ YES (skip if match)     | ✅ YES (on update/create)   | Per-ref (allows multi-webhook)  |
 | `reopen`               | All refs         | **ALL**                | ✅ YES (skip if match)     | ✅ YES (on update/create)   | Per-ref (allows multi-webhook)  |
 | `update` (normal)      | All refs         | **ALL**                | ✅ YES (skip if match)     | ✅ YES (on update/create)   | Per-ref (allows multi-webhook)  |
-| `update` (draft→ready) | **Global batch** | **ALL**                | ❌ NO (always process)     | ❌ NO (refs deleted)        | Row lock (refs deleted after)   |
+| `update` (draft→ready) | **Global batch** | **ALL**                | ❌ NO (once per event)     | ❌ NO (refs deleted)        | CAS `draft_to_ready_at` marker  |
 | `approved`             | All refs         | **ALL**                | ✅ YES (skip if match)     | ✅ YES (on update/create)   | Per-ref (allows multi-webhook)  |
 | `unapproved`           | All refs         | **ALL**                | ✅ YES (skip if match)     | ✅ YES (on update/create)   | Per-ref (allows multi-webhook)  |
 | `merge`                | **Global batch** | **ALL**                | ❌ NO (always process)     | ❌ NO (refs deleted)        | Row lock (refs deleted after)   |
@@ -358,7 +368,8 @@ Result: All messages (including orphaned Channel B) updated/deleted exactly once
 **Key Principles**:
 - ALL operations process ALL message refs (including orphaned ones)
 - Per-ref fingerprints enable efficient multi-webhook processing (skip redundant updates)
-- Global batch operations use transactional locks for exactly-once semantics
+- Global batch operations run exactly once per event: row locks for close/merge, the `draft_to_ready_at`
+  monotonic compare-and-set for draft→ready
 
 ## Race Condition Protections
 
@@ -382,7 +393,7 @@ Result: All messages (including orphaned Channel B) updated/deleted exactly once
 
 **`FOR UPDATE` locks** prevent concurrent data corruption:
 
-**1. In `get_or_create_message_refs()`** (`webhook/messaging.py` line 32-36)
+**1. In `get_or_create_message_refs()`** (`webhook/messaging.py`)
 ```sql
 SELECT 1 FROM merge_request_ref
 WHERE merge_request_ref_id = $1
@@ -391,7 +402,7 @@ FOR UPDATE
 - Serializes concurrent access to message references
 - Ensures atomic create-or-get operations
 
-**2. In `update_all_messages_transactional()`** (`webhook/messaging.py` line 217-270)
+**2. In `update_all_messages_transactional()`** (`webhook/messaging.py`)
 ```sql
 SELECT * FROM merge_request_message_ref
 WHERE merge_request_ref_id = $1
@@ -409,14 +420,15 @@ All database modifications occur within transactions to ensure:
 
 ## Code Reference Map
 
-| Functionality          | File                       | Lines   | Function                              |
-| ---------------------- | -------------------------- | ------- | ------------------------------------- |
-| Main webhook handler   | `webhook/merge_request.py` | 22-195  | `merge_request()`                     |
-| Message ref management | `webhook/messaging.py`     | 23-73   | `get_or_create_message_refs()`        |
-| Create/update messages | `webhook/messaging.py`     | 76-180  | `create_or_update_message()`          |
-| Batch message updates  | `webhook/messaging.py`     | 183-272 | `update_all_messages_transactional()` |
-| Card rendering         | `cards/render.py`          | -       | `render()`                            |
-| Database helpers       | `db.py`                    | 122-278 | `DBHelper` class                      |
+| Functionality          | File                       | Function                                           |
+| ---------------------- | -------------------------- | -------------------------------------------------- |
+| Main webhook handler   | `webhook/merge_request.py` | `merge_request()`, `_merge_request_locked()`       |
+| Draft→ready claim      | `webhook/merge_request.py` | `_claim_draft_to_ready()`                          |
+| Message ref management | `webhook/messaging.py`     | `get_or_create_message_refs()`                     |
+| Create/update messages | `webhook/messaging.py`     | `create_or_update_message()`                       |
+| Batch message updates  | `webhook/messaging.py`     | `update_all_messages_transactional()`              |
+| Card rendering         | `cards/render.py`          | `render()`                                         |
+| Database helpers       | `db.py`                    | `DBHelper` class                                   |
 
 ## Testing
 
