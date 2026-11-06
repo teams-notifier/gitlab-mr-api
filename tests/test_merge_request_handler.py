@@ -330,7 +330,7 @@ class TestMergeRequestUpdate:
     async def test_draft_to_ready_transition_deletes_and_creates_messages(
         self, sample_mr_payload, sample_mri, mock_database
     ):
-        """Test that draft→ready transition deletes old messages and creates new ones."""
+        """Test that draft→ready transition deletes old messages and creates new ones. Covers 001-AC4."""
         from webhook.merge_request import merge_request
 
         sample_mr_payload.object_attributes.action = "update"
@@ -338,9 +338,13 @@ class TestMergeRequestUpdate:
         sample_mr_payload.changes = {"draft": {"previous": True, "current": False}}
         new_mock_ref = make_mock_ref("token1", message_id=None)
 
-        mock_database.connection.fetchrow.return_value = {
-            "merge_request_extra_state": MagicMock(discussion_stats=None)
-        }
+        extra_state_row = {"merge_request_extra_state": MagicMock(discussion_stats=None)}
+        # OOO check, pipeline update, then the draft-to-ready claim: a returned row means it is won
+        mock_database.connection.fetchrow.side_effect = [
+            {"max_updated_at": None},
+            extra_state_row,
+            {"merge_request_ref_id": 1},
+        ] + [extra_state_row] * 5
 
         with (
             patch("webhook.merge_request.dbh.get_or_create_merge_request_ref_id", return_value=1),
@@ -369,6 +373,10 @@ class TestMergeRequestUpdate:
                 new_commits_revoke_approvals=False,
             )
 
+            claim_args = mock_database.connection.fetchrow.call_args_list[2][0]
+            assert "draft_to_ready_at" in claim_args[0]
+            assert claim_args[1] == "2025-01-01T00:00:00+00:00"
+
             mock_update.assert_called_once()
             call_args = mock_update.call_args
             assert call_args[0][5] == "draft-to-ready"
@@ -380,6 +388,62 @@ class TestMergeRequestUpdate:
             mock_create.assert_called_once()
             create_args = mock_create.call_args
             assert create_args[1]["update_only"] is False
+
+    async def test_draft_to_ready_replayed_by_another_hook_keeps_new_messages(
+        self, sample_mr_payload, sample_mri, mock_database
+    ):
+        """A second delivery of the same draft→ready event must not delete the reposted card.
+
+        Covers 001-AC2.
+        """
+        from webhook.merge_request import merge_request
+
+        sample_mr_payload.object_attributes.action = "update"
+        sample_mr_payload.object_attributes.draft = False
+        sample_mr_payload.changes = {"draft": {"previous": True, "current": False}}
+        event_ts = datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC)
+        reposted_ref = make_mock_ref("token1", message_id=uuid.uuid4())
+        reposted_ref.last_processed_updated_at = event_ts
+        reposted_ref.last_processed_fingerprint = "test-fp"
+
+        extra_state_row = {"merge_request_extra_state": MagicMock(discussion_stats=None)}
+        # OOO check, pipeline update, then the claim: no row back, an earlier delivery already won it
+        mock_database.connection.fetchrow.side_effect = [
+            {"max_updated_at": event_ts},
+            extra_state_row,
+            None,
+        ] + [extra_state_row] * 5
+
+        with (
+            patch("webhook.merge_request.dbh.get_or_create_merge_request_ref_id", return_value=1),
+            patch("webhook.merge_request.dbh.update_merge_request_ref_payload", return_value=sample_mri),
+            patch("webhook.merge_request.dbh.get_merge_request_ref_infos", return_value=sample_mri),
+            patch("webhook.merge_request.dbh.any_message_needs_update", return_value=False),
+            patch("webhook.merge_request.render", return_value={"card": "data"}),
+            patch("webhook.merge_request.compute_mri_fingerprint", return_value="test-fp"),
+            patch("webhook.merge_request.database", mock_database),
+            patch("webhook.messaging.database", mock_database),
+            patch("webhook.merge_request.update_all_messages_transactional") as mock_update,
+            patch("webhook.merge_request.get_or_create_message_refs") as mock_get_refs,
+            patch("webhook.merge_request.get_all_message_refs") as mock_get_all,
+            patch("webhook.merge_request.create_or_update_message") as mock_create,
+            patch("webhook.merge_request.update_message_with_fingerprint") as mock_patch_msg,
+            patch("httpx.AsyncClient", MockAsyncHttpxClient),
+        ):
+            mock_get_refs.return_value = {"token1": reposted_ref}
+            mock_get_all.return_value = [reposted_ref]
+
+            await merge_request(
+                mr=sample_mr_payload,
+                conversation_tokens=["token1"],
+                participant_ids_filter=[],
+                new_commits_revoke_approvals=False,
+            )
+
+            assert "draft_to_ready_at" in mock_database.connection.fetchrow.call_args_list[2][0][0]
+            mock_update.assert_not_called()
+            mock_create.assert_not_called()
+            mock_patch_msg.assert_not_called()
 
 
 class TestParticipantFiltering:
